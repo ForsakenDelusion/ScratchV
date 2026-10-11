@@ -1,6 +1,9 @@
 """Tests for verification module."""
 
 import numpy as np
+import pytest
+from scratchv.frontend.dsl_parser import DSLParser
+from scratchv.simulator.rv32_emulator import IRTraceExecutor
 from scratchv.verification.verifier import (
     DSLInterpreter,
     numpy_reference,
@@ -107,3 +110,91 @@ return y
         result = interpreter.run(dsl, {"x": x, "w": w, "b": b})
         expected = np.maximum(x * w + b, 0.0)
         np.testing.assert_array_almost_equal(result, expected)
+
+    def test_extended_integer_operations(self):
+        dsl = """
+a = const(-17, dtype:i32)
+b = const(5, dtype:i32)
+r = rem(a, b)
+lo = min(r, b)
+hi = max(lo, a)
+y = abs(hi)
+return y
+"""
+
+        result = DSLInterpreter().run(dsl, {})
+
+        assert result.dtype == np.int32
+        assert int(result) == 2
+
+    def test_extended_remainder_divide_by_zero_matches_riscv(self):
+        dsl = """
+a = const(-17, dtype:i32)
+z = const(0, dtype:i32)
+y = rem(a, z)
+return y
+"""
+
+        result = DSLInterpreter().run(dsl, {})
+
+        assert int(result) == -17
+
+    @pytest.mark.parametrize(
+        ("dtype", "numpy_dtype"),
+        [("f32", np.float32), ("f64", np.float64)],
+    )
+    def test_extended_float_min_max_abs_preserve_dtype(
+        self, dtype, numpy_dtype,
+    ):
+        dsl = f"""
+a = const(-2.5, dtype:{dtype})
+b = const(1.25, dtype:{dtype})
+lo = min(a, b)
+hi = max(lo, b)
+y = abs(hi)
+return y
+"""
+
+        result = DSLInterpreter().run(dsl, {})
+
+        assert result.dtype == numpy_dtype
+        assert float(result) == 1.25
+
+
+def test_ir_trace_executor_supports_extended_integer_operations():
+    program = DSLParser().parse("""
+a = const(-17, dtype:i32)
+b = const(5, dtype:i32)
+r = rem(a, b)
+lo = min(r, b)
+hi = max(lo, a)
+y = abs(hi)
+return y
+""")
+
+    result = IRTraceExecutor(program).run({})
+
+    assert result.dtype == np.int32
+    assert int(result) == 2
+
+
+@pytest.mark.parametrize(
+    ("dtype", "numpy_dtype"),
+    [("f32", np.float32), ("f64", np.float64)],
+)
+def test_ir_trace_executor_supports_extended_float_operations(
+    dtype, numpy_dtype,
+):
+    program = DSLParser().parse(f"""
+a = const(-2.5, dtype:{dtype})
+b = const(1.25, dtype:{dtype})
+lo = min(a, b)
+hi = max(lo, b)
+y = abs(hi)
+return y
+""")
+
+    result = IRTraceExecutor(program).run({})
+
+    assert result.dtype == numpy_dtype
+    assert float(result) == 1.25

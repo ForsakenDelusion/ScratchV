@@ -128,6 +128,9 @@ jobs:
           command -v clang
           command -v ld.lld
           command -v qemu-riscv32
+          clang --version
+          ld.lld --version
+          qemu-riscv32 --version
           $PY -c 'from scratchv.backend.llvm_mca import check_version; print(check_version("llvm-mca"))'
 
       # Includes scheduling and standalone CNN execution regressions.

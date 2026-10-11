@@ -10,6 +10,32 @@ from __future__ import annotations
 import struct
 import numpy as np
 
+from scratchv.verification.fp_reference import maximum_number, minimum_number
+from scratchv.verification.division_reference import divide
+
+
+def _riscv_i32_rem(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
+    """Return RV32 REM results, including divide-by-zero edge semantics."""
+    left, right = np.broadcast_arrays(
+        np.asarray(lhs, dtype=np.int32),
+        np.asarray(rhs, dtype=np.int32),
+    )
+
+    def scalar_rem(a, b):
+        dividend = int(a)
+        divisor = int(b)
+        if divisor == 0:
+            return dividend
+        if dividend == -(1 << 31) and divisor == -1:
+            return 0
+        quotient = abs(dividend) // abs(divisor)
+        if (dividend < 0) != (divisor < 0):
+            quotient = -quotient
+        return dividend - quotient * divisor
+
+    result = np.vectorize(scalar_rem, otypes=[np.int64])(left, right)
+    return np.asarray(result, dtype=np.int32)
+
 
 # ── Register file ─────────────────────────────────────────────────────
 
@@ -249,6 +275,8 @@ class RV32Emulator:
             return
 
         opcode = instr & 0x7F
+        if opcode in {0x07, 0x27, 0x43, 0x47, 0x4B, 0x4F, 0x53}:
+            raise ValueError("instruction requires the RISC-V F/D extension; RV32Emulator supports RV32IM only")
         self.pc += 4
 
         # ── OP / OP-IMM ──────────────────────────────────────────────────
@@ -265,10 +293,34 @@ class RV32Emulator:
             elif f3 == 0b000 and f7 == 0b0000001:  # MUL
                 self.regs[d["rd"]] = (rs1_v * rs2_v) & 0xFFFFFFFF
             elif f3 == 0b100 and f7 == 0b0000001:  # DIV
-                if rs2_v != 0:
-                    self.regs[d["rd"]] = (rs1_v // rs2_v) & 0xFFFFFFFF
-                else:
+                dividend = _sext(rs1_v, 32)
+                divisor = _sext(rs2_v, 32)
+                if divisor == 0:
                     self.regs[d["rd"]] = 0xFFFFFFFF
+                elif dividend == -(1 << 31) and divisor == -1:
+                    self.regs[d["rd"]] = 0x80000000
+                else:
+                    quotient = abs(dividend) // abs(divisor)
+                    if (dividend < 0) != (divisor < 0):
+                        quotient = -quotient
+                    self.regs[d["rd"]] = quotient & 0xFFFFFFFF
+            elif f3 == 0b110 and f7 == 0b0000001:  # REM
+                dividend = _sext(rs1_v, 32)
+                divisor = _sext(rs2_v, 32)
+                if divisor == 0:
+                    remainder = dividend
+                elif dividend == -(1 << 31) and divisor == -1:
+                    remainder = 0
+                else:
+                    quotient = abs(dividend) // abs(divisor)
+                    if (dividend < 0) != (divisor < 0):
+                        quotient = -quotient
+                    remainder = dividend - quotient * divisor
+                self.regs[d["rd"]] = remainder & 0xFFFFFFFF
+            elif f3 == 0b010 and f7 == 0b0000000:  # SLT
+                self.regs[d["rd"]] = int(
+                    _sext(rs1_v, 32) < _sext(rs2_v, 32)
+                )
             elif f3 == 0b111 and f7 == 0b0000000:  # AND
                 self.regs[d["rd"]] = rs1_v & rs2_v
             elif f3 == 0b110 and f7 == 0b0000000:  # OR
@@ -289,6 +341,14 @@ class RV32Emulator:
                 self.regs[d["rd"]] = rs1_v | d["imm"]
             elif f3 == 0b100:  # XORI
                 self.regs[d["rd"]] = rs1_v ^ d["imm"]
+            elif (
+                f3 == 0b101
+                and (instr >> 25) & 0x7F == 0b0100000
+            ):  # SRAI
+                shamt = (instr >> 20) & 0x1F
+                self.regs[d["rd"]] = (
+                    _sext(rs1_v, 32) >> shamt
+                ) & 0xFFFFFFFF
 
         # ── LOAD ──────────────────────────────────────────────────────────
         elif opcode == 0b0000011:
@@ -374,8 +434,8 @@ class IRTraceExecutor:
     """Execute a ScratchV IR program directly using numpy.
 
     Walks the IR instructions in order and computes results with numpy.
-    This provides the ground-truth output of the compiler pipeline without
-    needing to go through RISC-V binary execution.
+    This is a straight-line, value-only reference, not a RISC-V execution
+    oracle: it does not model floating-point fflags or target rounding modes.
     """
 
     def __init__(
@@ -405,14 +465,19 @@ class IRTraceExecutor:
         handler = getattr(self, f"_op_{op}", None)
         if handler is not None:
             return handler(instr)
-        return None
+        raise ValueError(f"Unsupported op in IR trace executor: {op}")
 
     def _resolve(self, val) -> np.ndarray:
         if val.is_constant and val.const_value is not None:
-            return np.array(float(val.const_value), dtype=np.float32)
+            dtype = {
+                "i32": np.int32,
+                "f32": np.float32,
+                "f64": np.float64,
+            }.get(val.dtype.value, np.float32)
+            return np.array(val.const_value, dtype=dtype)
         if val.name in self._values:
             return self._values[val.name]
-        return np.array(0.0, dtype=np.float32)
+        raise ValueError(f"Undefined IR value: {val.name}")
 
     def _get_operands(self, instr) -> list[np.ndarray]:
         return [self._resolve(op) for op in instr.operands]
@@ -440,7 +505,43 @@ class IRTraceExecutor:
 
     def _op_div(self, instr):
         ops = self._get_operands(instr)
-        result = ops[0] / (ops[1] + 1e-8)
+        result = divide(ops[0], ops[1])
+        if instr.dest:
+            self._values[instr.dest.name] = result
+        return result
+
+    def _op_rem(self, instr):
+        ops = self._get_operands(instr)
+        result = _riscv_i32_rem(ops[0], ops[1])
+        if instr.dest:
+            self._values[instr.dest.name] = result
+        return result
+
+    def _op_min(self, instr):
+        ops = self._get_operands(instr)
+        result = minimum_number(ops[0], ops[1])
+        if instr.dest:
+            self._values[instr.dest.name] = result
+        return result
+
+    def _op_max(self, instr):
+        ops = self._get_operands(instr)
+        result = maximum_number(ops[0], ops[1])
+        if instr.dest:
+            self._values[instr.dest.name] = result
+        return result
+
+    def _op_abs(self, instr):
+        ops = self._get_operands(instr)
+        result = np.abs(ops[0])
+        if instr.dest:
+            self._values[instr.dest.name] = result
+        return result
+
+    def _op_sqrt(self, instr):
+        ops = self._get_operands(instr)
+        with np.errstate(invalid="ignore"):
+            result = np.sqrt(ops[0])
         if instr.dest:
             self._values[instr.dest.name] = result
         return result
@@ -475,7 +576,12 @@ class IRTraceExecutor:
 
     def _op_load_const(self, instr):
         val = instr.attrs.get("value", 0)
-        result = np.array(float(val), dtype=np.float32)
+        dtype = {
+            "i32": np.int32,
+            "f32": np.float32,
+            "f64": np.float64,
+        }.get(instr.dest.dtype.value if instr.dest else "f32", np.float32)
+        result = np.array(val, dtype=dtype)
         if instr.dest:
             self._values[instr.dest.name] = result
         return result
@@ -648,10 +754,10 @@ class IRTraceExecutor:
         return None
 
     def _op_br(self, instr):
-        return None
+        raise ValueError("Unsupported control flow in straight-line IR trace executor: br")
 
     def _op_br_if(self, instr):
-        return None
+        raise ValueError("Unsupported control flow in straight-line IR trace executor: br_if")
 
     def _op_label(self, instr):
         return None

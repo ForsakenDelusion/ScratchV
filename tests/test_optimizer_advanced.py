@@ -1,29 +1,33 @@
 """Tests for advanced optimizer passes: peephole, muladd_fusion, LICM."""
 
 from scratchv.ir.builder import IRBuilder
-from scratchv.ir.types import OpCode
+from scratchv.ir.types import DataType, OpCode
 from scratchv.optimizer.peephole import IRPeepholeOptimizer
 from scratchv.optimizer.muladd_fusion import MulAddFusion
 from scratchv.optimizer.licm import LICM
+from scratchv.analysis.ir_verifier import verify_ir
 
 
 class TestIRPeepholeOptimizer:
-    def test_eliminate_addi_zero(self):
+    def test_keep_add_zero_result_definition(self):
         builder = IRBuilder()
-        builder.new_function("test")
+        function = builder.new_function("test")
         builder.new_block("entry")
-        a = builder.make_value(name="a")
-        c = builder.make_value(name="c")
-        # add a, 0  (no-op)
-        zero = builder.make_value(name="_z", is_constant=True, const_value=0)
+        a = builder.make_value(name="a", dtype=DataType.INT32)
+        function.params.append(a)
+        c = builder.make_value(name="c", dtype=DataType.INT32)
+        # ADD defines c even though its value equals a.
+        zero = builder.make_value(name="_z", dtype=DataType.INT32,
+                                  is_constant=True, const_value=0)
         builder._emit(OpCode.ADD, c, [a, zero])
         builder.ret(c)
 
         opt = IRPeepholeOptimizer()
-        opt.optimize(builder.program)
-        # The addi 0 should have been removed
+        assert opt.optimize(builder.program) == 0
         block = builder.program.functions[0].blocks[0]
-        assert all(i.opcode != OpCode.ADD for i in block.instructions)
+        assert block.instructions[0].opcode is OpCode.ADD
+        assert block.instructions[-1].operands[0] is c
+        assert verify_ir(builder.program) == (True, [])
 
     def test_eliminate_mul_one(self):
         builder = IRBuilder()
@@ -65,13 +69,14 @@ class TestIRPeepholeOptimizer:
 
 
 class TestMulAddFusion:
-    def test_fuse_mul_add(self):
+    def test_keep_mul_add_without_valid_fused_opcode(self):
         builder = IRBuilder()
-        builder.new_function("test")
+        function = builder.new_function("test")
         builder.new_block("entry")
-        a = builder.make_value(name="a")
-        b = builder.make_value(name="b")
-        acc = builder.make_value(name="acc")
+        a = builder.make_value(name="a", dtype=DataType.INT32)
+        b = builder.make_value(name="b", dtype=DataType.INT32)
+        acc = builder.make_value(name="acc", dtype=DataType.INT32)
+        function.params.extend([a, b, acc])
 
         tmp = builder.mul(a, b)
         result = builder.add(tmp, acc)
@@ -79,14 +84,16 @@ class TestMulAddFusion:
 
         opt = MulAddFusion()
         count = opt.optimize(builder.program)
-        assert count == 1
+        assert count == 0
 
         block = builder.program.functions[0].blocks[0]
-        # Should have one ADD (the fused one) and no separate MUL+ADD
+        # A valid MUL and binary ADD stay separate; no multiplier is dropped.
         adds = [i for i in block.instructions if i.opcode == OpCode.ADD]
         muls = [i for i in block.instructions if i.opcode == OpCode.MUL]
         assert len(adds) == 1
-        assert len(muls) == 0
+        assert len(muls) == 1
+        assert adds[0].operands == [tmp, acc]
+        assert verify_ir(builder.program) == (True, [])
 
     def test_no_fuse_without_mul(self):
         builder = IRBuilder()
@@ -108,8 +115,8 @@ class TestLICM:
         builder.new_function("test")
         builder.new_block("entry")
 
-        a = builder.make_value(name="a")
-        b = builder.make_value(name="b")
+        a = builder.make_value(name="a", dtype=DataType.INT32)
+        b = builder.make_value(name="b", dtype=DataType.INT32)
 
         # Loop with invariant mul inside
         iv = builder.for_loop(0, 10)  # FOR
@@ -138,7 +145,7 @@ class TestLICM:
 
         iv = builder.for_loop(0, 10)
         # This add depends on iv (loop variant) → should not be hoisted
-        builder.add(iv, builder.load_const(1.0))
+        builder.add(iv, builder.load_const(1, DataType.INT32))
         builder.endfor()
         builder.ret()
 

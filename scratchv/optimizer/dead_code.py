@@ -7,7 +7,7 @@ Removes instructions whose result is never used.
 from __future__ import annotations
 
 from scratchv.ir.types import (
-    OpCode, Instruction, BasicBlock, Function, Program,
+    DataType, OpCode, Instruction, BasicBlock, Function, Program,
 )
 from scratchv.pass_interface import OptimizationPass
 
@@ -17,6 +17,9 @@ class DeadCodeEliminator(OptimizationPass):
 
     name = "dead-code-elim"
 
+    def __init__(self, *, preserve_float_semantics: bool = False):
+        self.preserve_float_semantics = preserve_float_semantics
+
     def optimize(self, program: Program) -> int:
         """Run dead code elimination.
 
@@ -25,21 +28,23 @@ class DeadCodeEliminator(OptimizationPass):
         return sum(self._eliminate_function(func) for func in program.functions)
 
     def _eliminate_function(self, func: Function) -> int:
-        return sum(self._eliminate_block(block) for block in func.blocks)
+        # A definition in one block may be consumed by another block or phi.
+        # This conservative one-pass DCE keeps every function-wide use; it
+        # does not attempt CFG reachability or iterative dead-chain removal.
+        used = {
+            operand.name
+            for block in func.blocks
+            for instr in (*block.phi_nodes, *block.instructions)
+            for operand in instr.operands
+        }
+        return sum(self._eliminate_block(block, used) for block in func.blocks)
 
-    def _eliminate_block(self, block: BasicBlock) -> int:
+    def _eliminate_block(self, block: BasicBlock,
+                         used: set[str] | None = None) -> int:
         changes = 0
-        # Collect all used value names
-        used: set[str | None] = set()
-        # Return values and branch targets are always live
-        for instr in block.instructions:
-            if instr.opcode in (
-                    OpCode.RETURN, OpCode.BR,
-                    OpCode.BR_IF, OpCode.STORE,
-                    OpCode.ENDFOR, OpCode.FOR):
-                used.add(instr.dest.name if instr.dest else None)
-            for op in instr.operands:
-                used.add(op.name)
+        if used is None:
+            used = {operand.name for instr in (*block.phi_nodes, *block.instructions)
+                    for operand in instr.operands}
 
         # Filter: keep instructions with side effects or whose dest is used
         new_instrs: list[Instruction] = []
@@ -54,9 +59,14 @@ class DeadCodeEliminator(OptimizationPass):
         block.instructions = new_instrs
         return changes
 
-    @staticmethod
-    def _is_side_effect(instr: Instruction) -> bool:
+    def _is_side_effect(self, instr: Instruction) -> bool:
         """Check if an instruction has side effects and must be kept."""
+        if self.preserve_float_semantics and instr.opcode.is_arith():
+            values = [*instr.operands, *([instr.dest] if instr.dest else [])]
+            if any(value.dtype in (DataType.FLOAT32, DataType.FLOAT64) for value in values):
+                # Even an unused result may set fflags. Keep FP arithmetic
+                # conservatively; this does not make LOAD_CONST effectful.
+                return True
         return instr.opcode in (
             OpCode.STORE,
             OpCode.RETURN,

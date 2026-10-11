@@ -13,7 +13,7 @@ is loop-invariant if all its operands are:
 from __future__ import annotations
 
 from scratchv.ir.types import (
-    OpCode, Instruction, BasicBlock, Function, Program,
+    DataType, OpCode, Instruction, BasicBlock, Function, Program,
 )
 from scratchv.pass_interface import OptimizationPass
 
@@ -22,6 +22,9 @@ class LICM(OptimizationPass):
     """Hoist loop-invariant code out of loops."""
 
     name = "licm"
+
+    def __init__(self, *, preserve_float_semantics: bool = False):
+        self.preserve_float_semantics = preserve_float_semantics
 
     def optimize(self, program: Program) -> int:
         """Run LICM on all functions.
@@ -76,12 +79,14 @@ class LICM(OptimizationPass):
                         variant_names.add(instr.dest.name)
                     j += 1
 
-            # Hoist: move invariant instructions before the FOR
-            for idx, instr in reversed(hoisted):
+            # Remove all candidates before inserting any: insertion would
+            # otherwise shift the indices of candidates still in the loop.
+            for idx, _ in reversed(hoisted):
                 instrs.pop(idx)
-                instrs.insert(loop_start, instr)
-                loop_end += 1  # adjust for shift
-                changes += 1
+            instrs[loop_start:loop_start] = [instr for _, instr in hoisted]
+            # The total length and ENDFOR's index are unchanged. Keep the
+            # original order and do not skip a following loop.
+            changes += len(hoisted)
 
             i = loop_end + 1
 
@@ -102,11 +107,17 @@ class LICM(OptimizationPass):
     def _is_invariant(self, instr: Instruction, variant_names: set[str],
                       loop_defs: set[str]) -> bool:
         """Check if an instruction is loop-invariant."""
-        # Control flow and store instructions are never invariant
-        if instr.opcode in (
-                OpCode.STORE, OpCode.BR, OpCode.BR_IF,
-                OpCode.RETURN, OpCode.FOR, OpCode.ENDFOR,
-                OpCode.LABEL):
+        # Only pure numeric operations and literal loads are candidates.
+        # An invariant pointer does not prove invariant memory contents, or
+        # that a LOAD/ALLOCA is safe to speculate out of a zero-trip loop.
+        if not (instr.opcode.is_arith() or instr.opcode is OpCode.LOAD_CONST):
+            return False
+        if self.preserve_float_semantics and instr.opcode.is_arith() and any(
+            value.dtype in (DataType.FLOAT32, DataType.FLOAT64)
+            for value in [*instr.operands, *([instr.dest] if instr.dest else [])]
+        ):
+            # An unused result may still set fflags. Moving the operation
+            # before the loop changes whether it executes at all.
             return False
         # An instruction is invariant if all its operands are:
         # - constants, or

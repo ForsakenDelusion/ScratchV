@@ -330,6 +330,10 @@ _SIGNATURE_GROUPS = [
     ((O.ADD, O.SUB, O.MUL, O.DIV, O.MATMUL, O.DOT), (2, 2, True, "T")),
     ((O.NEG, O.RELU, O.MAXPOOL, O.RESHAPE, O.TRANSPOSE), (1, 1, True, "T")),
     ((O.EXP, O.GELU, O.SIGMOID, O.SOFTMAX), (1, 1, True, "F")),
+    ((O.SQRT,), (1, 1, True, "F")),
+    ((O.REM,), (2, 2, True, "I32")),
+    ((O.MIN, O.MAX), (2, 2, True, "N")),
+    ((O.ABS,), (1, 1, True, "N")),
     ((O.CONV, O.GEMM), (3, 3, True, "T")),
     ((O.CONCAT,), (1, None, True, "T")),
     ((O.LOAD_CONST, O.ALLOCA, O.FOR), (0, 0, True, None)),
@@ -345,9 +349,13 @@ _EXPECTED_SIGNATURES = {
 
 
 def signature_program(opcode, dtype=None):
+    minimum, _, has_dest, family = _EXPECTED_SIGNATURES[opcode]
     if dtype is None:
-        dtype = D.INT32 if opcode in (O.FOR, O.BR_IF) else D.FLOAT32
-    minimum, _, has_dest, _ = _EXPECTED_SIGNATURES[opcode]
+        dtype = (
+            D.INT32
+            if opcode in (O.FOR, O.BR_IF) or family == "I32"
+            else D.FLOAT32
+        )
     operands = [literal(1, dtype, f"c{i}") for i in range(minimum)]
     dest = V("result", dtype) if has_dest else None
     inst = I(opcode, dest, operands, attrs={"value": 1, "start": 0, "end": 2, "step": 1})
@@ -398,12 +406,20 @@ def test_signature_count_and_destination_boundaries(opcode, signature):
         assert any("operands, got" in i.message for i in verify_ir(p)[1])
 
 
-@pytest.mark.parametrize("opcode", [O.ADD, O.EXP], ids=["numeric-family", "float-family"])
+@pytest.mark.parametrize(
+    "opcode", [O.ADD, O.EXP, O.MIN, O.REM],
+    ids=["same-type-family", "float-family", "extended-numeric-family", "i32-family"],
+)
 @pytest.mark.parametrize("dtype", list(D), ids=lambda dtype: dtype.value)
 def test_shared_type_families(opcode, dtype):
     p, _ = signature_program(opcode, dtype)
     passed, found = verify_ir(p)
-    valid = opcode == O.ADD or dtype in (D.FLOAT32, D.FLOAT64)
+    valid = (
+        opcode == O.ADD
+        or opcode == O.EXP and dtype in (D.FLOAT32, D.FLOAT64)
+        or opcode == O.MIN and dtype in (D.INT32, D.FLOAT32, D.FLOAT64)
+        or opcode == O.REM and dtype is D.INT32
+    )
     assert passed is valid
     assert (not found) if valid else all(i.rule == "type-consistency" for i in found)
 

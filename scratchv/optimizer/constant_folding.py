@@ -7,15 +7,25 @@ replacing them with load_const instructions.
 from __future__ import annotations
 
 from scratchv.ir.types import (
-    OpCode, Instruction, BasicBlock, Function, Program,
+    DataType, OpCode, Instruction, BasicBlock, Function, Program,
 )
 from scratchv.pass_interface import OptimizationPass
 
 
 class ConstantFolder(OptimizationPass):
-    """Fold constant expressions in an IR Program."""
+    """Fold constant expressions in an IR Program.
+
+    ``preserve_float_semantics=True`` is required for real typed hard-float
+    targets: Python arithmetic does not model binary32 operand quantization,
+    target rounding modes, or fflags. The default retains the legacy stub
+    pipeline's historical behavior; CompilerDriver enables the safe policy
+    for extended instruction selection, including explicitly selected passes.
+    """
 
     name = "constant-folding"
+
+    def __init__(self, *, preserve_float_semantics: bool = False):
+        self.preserve_float_semantics = preserve_float_semantics
 
     def optimize(self, program: Program) -> int:
         """Run constant folding on all functions. Returns number of folds."""
@@ -41,19 +51,50 @@ class ConstantFolder(OptimizationPass):
         """Try to fold an instruction. Returns a replacement or None."""
         if instr.opcode not in (
                 OpCode.ADD, OpCode.SUB,
-                OpCode.MUL, OpCode.DIV):
+                OpCode.MUL, OpCode.DIV, OpCode.REM,
+                OpCode.MIN, OpCode.MAX, OpCode.ABS):
             return None
-        if len(instr.operands) != 2:
-            return None
-
-        lhs, rhs = instr.operands
-        if not lhs.is_constant or not rhs.is_constant:
-            return None
-        if lhs.const_value is None or rhs.const_value is None:
+        expected_operands = 1 if instr.opcode is OpCode.ABS else 2
+        if len(instr.operands) != expected_operands:
             return None
 
-        a, b = float(lhs.const_value), float(rhs.const_value)
-        result = self._compute(instr.opcode, a, b)
+        if any(not operand.is_constant for operand in instr.operands):
+            return None
+        if any(operand.const_value is None for operand in instr.operands):
+            return None
+
+        lhs = instr.operands[0]
+        dtype = instr.dest.dtype if instr.dest is not None else lhs.dtype
+        if self.preserve_float_semantics and any(
+            operand.dtype in {DataType.FLOAT32, DataType.FLOAT64}
+            for operand in [*instr.operands, *([instr.dest] if instr.dest else [])]
+        ):
+            # Keep the actual target operation. Even an exactly representable
+            # host result does not prove that operand conversion or fflags agree.
+            return None
+        if dtype is DataType.INT32:
+            values = [operand.const_value for operand in instr.operands]
+            if any(
+                isinstance(value, bool) or not isinstance(value, int)
+                for value in values
+            ):
+                return None
+            if instr.opcode is OpCode.ABS:
+                result = self._wrap_i32(abs(values[0]))
+            else:
+                result = self._compute_i32(
+                    instr.opcode,
+                    values[0],
+                    values[1],
+                )
+        else:
+            if instr.opcode in {
+                OpCode.REM, OpCode.MIN, OpCode.MAX, OpCode.ABS,
+            }:
+                return None
+            rhs = instr.operands[1]
+            a, b = float(lhs.const_value), float(rhs.const_value)
+            result = self._compute_float(instr.opcode, a, b)
         if result is None:
             return None
 
@@ -61,6 +102,7 @@ class ConstantFolder(OptimizationPass):
         if dest is not None:
             dest.is_constant = True
             dest.const_value = result
+            dest.bit_pattern = None
 
         return Instruction(
             opcode=OpCode.LOAD_CONST,
@@ -69,7 +111,9 @@ class ConstantFolder(OptimizationPass):
         )
 
     @staticmethod
-    def _compute(opcode: OpCode, a: float, b: float) -> float | None:
+    def _compute_float(
+        opcode: OpCode, a: float, b: float,
+    ) -> float | None:
         mapping = {
             OpCode.ADD: a + b,
             OpCode.SUB: a - b,
@@ -77,3 +121,33 @@ class ConstantFolder(OptimizationPass):
             OpCode.DIV: a / b if b != 0 else None,
         }
         return mapping.get(opcode)
+
+    @staticmethod
+    def _compute_i32(opcode: OpCode, a: int, b: int) -> int | None:
+        """Evaluate an i32 operation with RV32 two's-complement semantics."""
+        if opcode in (OpCode.DIV, OpCode.REM):
+            if b == 0:
+                return None
+            quotient = abs(a) // abs(b)
+            if (a < 0) != (b < 0):
+                quotient = -quotient
+            result = quotient if opcode is OpCode.DIV else a - quotient * b
+        else:
+            mapping = {
+                OpCode.ADD: a + b,
+                OpCode.SUB: a - b,
+                OpCode.MUL: a * b,
+                OpCode.MIN: min(a, b),
+                OpCode.MAX: max(a, b),
+            }
+            result = mapping.get(opcode)
+            if result is None:
+                return None
+
+        # RV32 integer arithmetic wraps modulo 2**32.
+        return ConstantFolder._wrap_i32(result)
+
+    @staticmethod
+    def _wrap_i32(value: int) -> int:
+        value &= 0xFFFF_FFFF
+        return value if value < 0x8000_0000 else value - 0x1_0000_0000

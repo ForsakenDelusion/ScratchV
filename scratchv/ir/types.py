@@ -19,8 +19,13 @@ class OpCode(enum.Enum):
     SUB = "sub"
     MUL = "mul"
     DIV = "div"
+    REM = "rem"
+    MIN = "min"
+    MAX = "max"
     # Arithmetic (unary)
     NEG = "neg"
+    ABS = "abs"
+    SQRT = "sqrt"
     EXP = "exp"
     # Memory / data
     LOAD = "load"
@@ -50,7 +55,18 @@ class OpCode(enum.Enum):
     CONCAT = "concat"
 
     def is_arith(self) -> bool:
-        return self in (OpCode.ADD, OpCode.SUB, OpCode.MUL, OpCode.DIV)
+        return self in (
+            OpCode.ADD,
+            OpCode.SUB,
+            OpCode.MUL,
+            OpCode.DIV,
+            OpCode.REM,
+            OpCode.MIN,
+            OpCode.MAX,
+            OpCode.NEG,
+            OpCode.ABS,
+            OpCode.SQRT,
+        )
 
     def is_nn(self) -> bool:
         return self in (
@@ -85,7 +101,10 @@ class DataType(enum.Enum):
             1: DataType.FLOAT32, 6: DataType.INT32,
             7: DataType.INT64, 11: DataType.FLOAT64,
         }
-        return mapping.get(elem_type, DataType.FLOAT32)
+        try:
+            return mapping[elem_type]
+        except KeyError as exc:
+            raise ValueError(f"unsupported ONNX element type: {elem_type}") from exc
 
 
 @dataclass
@@ -96,6 +115,16 @@ class Value:
     is_constant: bool = False
     const_value: Optional[Union[float, int]] = None
     shape: tuple[int, ...] = ()
+    # Optional source encoding for FP constants; authoritative over host float
+    # conversion, which can quiet a binary32 signaling NaN.
+    bit_pattern: Optional[int] = None
+
+
+def valid_float_bit_pattern(dtype: DataType, bits: object) -> bool:
+    """Whether an explicit FP storage encoding fits the value's precision."""
+    width = 32 if dtype is DataType.FLOAT32 else 64 if dtype is DataType.FLOAT64 else None
+    return (width is not None and isinstance(bits, int) and not isinstance(bits, bool)
+            and 0 <= bits < (1 << width))
 
 
 @dataclass
