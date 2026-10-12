@@ -321,6 +321,17 @@ class CompilerDriver:
                     ],
                 )
 
+        if self.config.backend == "llvm":
+            from scratchv.backend.llvm_codegen import validate_llvm_types
+
+            # Check before optimization can fold away unsupported operations.
+            try:
+                validate_llvm_types(program)
+            except ValueError as exc:
+                return CompileResult(
+                    success=False, errors=[f"Codegen input error: {exc}"],
+                )
+
         if self.config.verify_ir:
             self._check_ir(program, "after-parse")
 
