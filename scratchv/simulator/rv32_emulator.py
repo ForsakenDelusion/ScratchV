@@ -10,6 +10,7 @@ from __future__ import annotations
 import struct
 import numpy as np
 
+from scratchv.ir.types import DataType, valid_float_bit_pattern
 from scratchv.verification.fp_reference import maximum_number, minimum_number
 from scratchv.verification.division_reference import divide
 
@@ -428,6 +429,21 @@ class RV32Emulator:
         self.regs[0] = 0
 
 
+def _constant_array(value, dtype: DataType, bit_pattern=None) -> np.ndarray:
+    """Interpret explicit storage bits without a host floating-point conversion."""
+    numpy_type = {
+        DataType.INT32: np.int32,
+        DataType.FLOAT32: np.float32,
+        DataType.FLOAT64: np.float64,
+    }.get(dtype, np.float32)
+    if bit_pattern is None:
+        return np.array(value, dtype=numpy_type)
+    if not valid_float_bit_pattern(dtype, bit_pattern):
+        raise ValueError(f"invalid constant bit_pattern for {dtype.value}")
+    storage_type = np.uint32 if dtype is DataType.FLOAT32 else np.uint64
+    return np.array(bit_pattern, dtype=storage_type).view(numpy_type)
+
+
 # ── Trace executor (IR-based, for accurate verification) ──────────────
 
 class IRTraceExecutor:
@@ -443,18 +459,23 @@ class IRTraceExecutor:
             initializers: dict[str, np.ndarray] | None = None):
         self.program = program
         self._values: dict[str, np.ndarray] = {}
+        # Preserve instruction-only encodings when resolving constant operands.
+        self._constant_bits: dict[str, int] = {}
         self._attrs: dict[str, dict] = {}
         self._initializers = initializers or {}
 
     def run(self, inputs: dict[str, np.ndarray]) -> np.ndarray:
         """Execute the program with given inputs. Returns the return value."""
         self._values = dict(inputs)
+        self._constant_bits = {}
 
         for init_name, init_arr in self._initializers.items():
             self._values[init_name] = init_arr
 
         output = None
         for func in self.program.functions:
+            # LOAD_CONST definitions belong to this function's value namespace.
+            self._constant_bits = {}
             for block in func.blocks:
                 for instr in block.instructions:
                     output = self._exec_instr(instr)
@@ -468,13 +489,10 @@ class IRTraceExecutor:
         raise ValueError(f"Unsupported op in IR trace executor: {op}")
 
     def _resolve(self, val) -> np.ndarray:
-        if val.is_constant and val.const_value is not None:
-            dtype = {
-                "i32": np.int32,
-                "f32": np.float32,
-                "f64": np.float64,
-            }.get(val.dtype.value, np.float32)
-            return np.array(val.const_value, dtype=dtype)
+        if val.is_constant:
+            bits = self._constant_bits.get(val.name, val.bit_pattern)
+            if bits is not None or val.const_value is not None:
+                return _constant_array(val.const_value, val.dtype, bits)
         if val.name in self._values:
             return self._values[val.name]
         raise ValueError(f"Undefined IR value: {val.name}")
@@ -575,15 +593,20 @@ class IRTraceExecutor:
         return result
 
     def _op_load_const(self, instr):
-        val = instr.attrs.get("value", 0)
-        dtype = {
-            "i32": np.int32,
-            "f32": np.float32,
-            "f64": np.float64,
-        }.get(instr.dest.dtype.value if instr.dest else "f32", np.float32)
-        result = np.array(val, dtype=dtype)
+        bits = instr.attrs.get("bit_pattern")
+        value_bits = instr.dest.bit_pattern if instr.dest else None
+        if bits is not None and value_bits is not None and bits != value_bits:
+            raise ValueError("constant bit_pattern differs from result metadata")
+        if bits is None:
+            bits = value_bits
+        dtype = instr.dest.dtype if instr.dest else DataType.FLOAT32
+        result = _constant_array(instr.attrs.get("value", 0), dtype, bits)
         if instr.dest:
             self._values[instr.dest.name] = result
+            if bits is not None:
+                self._constant_bits[instr.dest.name] = bits
+            else:
+                self._constant_bits.pop(instr.dest.name, None)
         return result
 
     def _op_reshape(self, instr):
