@@ -59,6 +59,38 @@ def test_llvm_rejects_i32_add_without_output(tmp_path, frontend, level):
     assert not output.exists()
 
 
+@pytest.mark.parametrize("operation", ["Add", "Sub", "Mul", "Div"])
+@pytest.mark.parametrize("level", ["none", "basic", "all"])
+def test_llvm_rejects_nonconstant_onnx_i32_arithmetic(tmp_path, operation, level):
+    # Runtime parameters prevent constant folding from hiding arithmetic lowering.
+    inputs = [
+        onnx.helper.make_tensor_value_info(name, onnx.TensorProto.INT32, [])
+        for name in ("a", "b")
+    ]
+    graph = onnx.helper.make_graph(
+        [onnx.helper.make_node(operation, ["a", "b"], ["r"])],
+        "main", inputs,
+        [onnx.helper.make_tensor_value_info("r", onnx.TensorProto.INT32, [])],
+    )
+    model = onnx.helper.make_model(
+        graph, opset_imports=[onnx.helper.make_opsetid("", 13)],
+    )
+    onnx.checker.check_model(model)
+    source = tmp_path / "arithmetic.onnx"
+    onnx.save(model, source)
+    output = tmp_path / "out.ll"
+    driver = CompilerDriver(CompilerConfig(
+        backend="llvm", optimize_level=level, verify_ir=True,
+    ))
+
+    result = driver.compile(str(source), str(output))
+
+    assert not result.success
+    assert f"LLVM backend does not support {operation.lower()} for i32" in result.errors[0]
+    assert result.output_text == ""
+    assert not output.exists()
+
+
 def test_llvm_rejects_unused_i32_before_optimization_and_preserves_output(
     tmp_path, monkeypatch,
 ):

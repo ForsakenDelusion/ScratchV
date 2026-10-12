@@ -7,6 +7,7 @@ virtual registers.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Optional
 
 from scratchv.ir.types import Instruction, Function, Program
@@ -77,10 +78,38 @@ class InstructionSelector:
                 )
                 for block_index, block in enumerate(func.blocks)
             })
-        for func, labels in zip(self.program.functions, block_labels):
+        for function_index, (func, labels) in enumerate(zip(self.program.functions, block_labels)):
             self._block_labels = labels
+            start = len(self._instructions)
             self._select_function(func)
+            if multiple_functions:
+                self._namespace_function_registers(start, function_index)
         return self._instructions
+
+    def _namespace_function_registers(self, start: int, function_index: int) -> dict[str, str]:
+        """Give function-local vregs unique identities in the flat machine stream.
+
+        Rewrite only machine operands, preserving the caller's IR names and
+        operand class/width. Fresh names avoid every source and temporary name.
+        Subclasses use the returned mapping to rename associated local objects.
+        """
+        names: dict[str, str] = {}
+
+        def scoped(operand: MachineOperand | None) -> MachineOperand | None:
+            if operand is None or operand.kind != "vreg":
+                return operand
+            name = str(operand.value)
+            if name not in names:
+                names[name] = str(self._fresh_vreg(f"f{function_index}").value)
+            return replace(operand, value=names[name])
+
+        for index in range(start, len(self._instructions)):
+            instruction = self._instructions[index]
+            self._instructions[index] = replace(
+                instruction, dst=scoped(instruction.dst),
+                src1=scoped(instruction.src1), src2=scoped(instruction.src2),
+            )
+        return names
 
     def _claim_label(self, preferred: str) -> str:
         """Allocate one symbol in the shared block/pool/internal namespace."""

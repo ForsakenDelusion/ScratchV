@@ -242,6 +242,14 @@ class ExtendedInstructionSelector(InstructionSelector):
             for instr in block.instructions:
                 self._select_instruction(instr)
 
+    def _namespace_function_registers(self, start: int, function_index: int) -> dict[str, str]:
+        names = super()._namespace_function_registers(start, function_index)
+        # Rename this function's objects before the next function reuses IR names.
+        self.local_slots = {
+            names.get(name, name): slot for name, slot in self.local_slots.items()
+        }
+        return names
+
     def _select_alloca(self, instr: Instruction) -> None:
         from scratchv.backend.allocation import SpillSlot
 
