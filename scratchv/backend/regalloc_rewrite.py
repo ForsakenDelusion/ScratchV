@@ -19,6 +19,9 @@ def rewrite_with_spills(allocator: Any, instructions: list[Any]) -> str:
     CFG boundaries, and invalidates ABI-clobbered registers across calls.
     """
 
+    # Every rewrite owns a new output list, even for empty input. Rebinding
+    # also preserves instruction lists already returned to callers.
+    allocator._allocated_instructions = []
     if not instructions:
         return ""
     if not allocator.phys_regs:
@@ -100,7 +103,6 @@ def rewrite_with_spills(allocator: Any, instructions: list[Any]) -> str:
     stack_current: set[str] = set()
     rename: dict[str, str] = {}
     lines: list[str] = []
-    allocator._allocated_instructions = []
 
     def bank_for(vreg: str) -> list[str]:
         return allocator.registers_for(vreg) if hasattr(allocator, "registers_for") else allocator.phys_regs
