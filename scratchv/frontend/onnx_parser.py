@@ -278,7 +278,10 @@ class ONNXParser:
         result = inputs[0]
         reduce_pair = getattr(self.builder, operator)
         for value in inputs[1:]:
-            result = reduce_pair(result, value)
+            result = reduce_pair(
+                result, value,
+                propagate_nan=result.dtype in (DataType.FLOAT32, DataType.FLOAT64),
+            )
         self._define_outputs(outputs, result)
 
     def _handle_abs(self, node, inputs: list[Value],

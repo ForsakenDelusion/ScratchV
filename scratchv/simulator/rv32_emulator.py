@@ -538,6 +538,9 @@ class IRTraceExecutor:
     def _op_min(self, instr):
         ops = self._get_operands(instr)
         result = minimum_number(ops[0], ops[1])
+        if instr.attrs.get("propagate_nan", False):
+            result = np.where(np.isnan(ops[0]) | np.isnan(ops[1]),
+                              np.asarray(np.nan, dtype=result.dtype), result)
         if instr.dest:
             self._values[instr.dest.name] = result
         return result
@@ -545,6 +548,9 @@ class IRTraceExecutor:
     def _op_max(self, instr):
         ops = self._get_operands(instr)
         result = maximum_number(ops[0], ops[1])
+        if instr.attrs.get("propagate_nan", False):
+            result = np.where(np.isnan(ops[0]) | np.isnan(ops[1]),
+                              np.asarray(np.nan, dtype=result.dtype), result)
         if instr.dest:
             self._values[instr.dest.name] = result
         return result

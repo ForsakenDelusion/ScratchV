@@ -4,8 +4,10 @@ import re
 import subprocess
 
 import onnx
+import numpy as np
 import pytest
 from onnx import TensorProto as TP, helper
+from onnx.reference import ReferenceEvaluator
 
 from scratchv.analysis.ir_verifier import verify_ir
 from scratchv.backend.abi_frame import apply_abi_frames
@@ -100,8 +102,11 @@ def test_t12_storage_discriminator_preserves_typed_bits(target, packed, operatio
     write_model(path, nt, [tensor], operation)
     program, actual = compile_model(path, tmp_path, "greedy", "all", True, target)
     assert program.global_values[0].bit_pattern == raw
-    two = 0x40000000 if nt == TP.FLOAT else 0x4000000000000000
-    assert actual == ((raw, 0) if operation == "return" else (two, 0x10))
+    canonical_nan = 0x7FC00000 if nt == TP.FLOAT else 0x7FF8000000000000
+    if operation == "Min":
+        with np.errstate(invalid="ignore"):
+            assert np.isnan(ReferenceEvaluator(onnx.load(path)).run(None, {})[0]).all()
+    assert actual == ((raw, 0) if operation == "return" else (canonical_nan, 0x10))
 
 
 @pytest.mark.parametrize("target", TARGETS)
@@ -134,7 +139,9 @@ def test_t12_t16_singular_wire_and_graph_merge_semantics(target, variant, tmp_pa
     write_model(path, nt, [tensor], "Min", split_graph=variant == "merged_graph")
     program, actual = compile_model(path, tmp_path, "greedy", "all", True, target)
     assert program.global_values[0].bit_pattern == raw
-    assert actual == (0x40000000 if nt == TP.FLOAT else 0x4000000000000000, 0x10)
+    with np.errstate(invalid="ignore"):
+        assert np.isnan(ReferenceEvaluator(onnx.load(path)).run(None, {})[0]).all()
+    assert actual == (0x7FC00000 if nt == TP.FLOAT else 0x7FF8000000000000, 0x10)
 
 
 @pytest.mark.parametrize("target", TARGETS)

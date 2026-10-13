@@ -154,6 +154,7 @@ jobs:
           "$COMPAT_PYTHON" -m pytest \
             tests/test_topic28_python_compat.py \
             tests/test_topic28_ir_frontend.py \
+            tests/test_topic28_onnx_nan.py \
             tests/test_topic28_acceptance.py \
             tests/test_regalloc_result_reuse.py \
             -v --tb=short \
