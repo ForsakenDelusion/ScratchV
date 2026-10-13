@@ -1,5 +1,7 @@
 # ScratchV engineering memory
 
+[2026-10-13] Python 最低版本兼容必须在真实最低版本环境中导入完整包并运行公开入口；AST 能解析、较新版本回归通过，都不能发现旧解释器的注解求值、dataclass 参数和路径 API 问题。NumPy 1.x 与 2.x 的标量提升规则不同，要求 f32 的 ONNX 测试夹具应显式使用 f32 运算数；pybind 枚举应比较值而非实例身份。适用于项目声明 Python 3.8+ 时的兼容验证和 CI。
+
 [2026-09-18] 课题 01 的解析成功和块数检查不能证明控制流执行正确；验收须核对比较契约、分支合流、循环变量更新与零次路径。当前 DSLInterpreter 的分支处理为空操作，不可作为控制流执行 oracle；未更新条件变量的旧 while 示例仅适合解析测试。
 
 [2026-09-13] DSL benchmark 的详细日志按用例使用默认关闭的 details/summary 折叠，汇总表、失败检查和性能提示保留在外层；GitHub Markdown 与本地 HTML 均需支持，HTML 中的诊断源码必须转义。

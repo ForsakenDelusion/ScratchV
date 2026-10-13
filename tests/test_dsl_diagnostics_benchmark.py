@@ -1,5 +1,7 @@
 """Exercise the Topic 9 report through its real subprocess interface."""
 
+from __future__ import annotations
+
 import json
 import subprocess
 import sys

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Run all register allocation benchmarks and produce a report."""
 
+from __future__ import annotations
+
 import argparse
 import datetime
 import json

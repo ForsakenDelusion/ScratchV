@@ -1,6 +1,7 @@
 """ISA/ABI requirements for scalar RISC-V instruction selection."""
 
 from dataclasses import dataclass
+from typing import FrozenSet
 
 from scratchv.ir.types import DataType, OpCode
 
@@ -23,8 +24,8 @@ class TargetFeatures:
             )
 
     @property
-    def extensions(self) -> frozenset[str]:
-        return frozenset(char.upper() for char in self.isa.removeprefix("rv32"))
+    def extensions(self) -> FrozenSet[str]:
+        return frozenset(char.upper() for char in self.isa[4:])
 
     def require_float(self, opcode: OpCode, dtype: DataType) -> None:
         if dtype not in {DataType.FLOAT32, DataType.FLOAT64}:

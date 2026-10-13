@@ -16,7 +16,7 @@ Usage:
 import re
 
 from dataclasses import dataclass, field
-from typing import Literal, Optional
+from typing import Dict, List, Literal, Optional, Tuple
 
 ParseStatus = Literal[
     "valid",
@@ -32,7 +32,7 @@ class InstructionSpec:
 
     min_operands: int
     max_operands: int
-    operand_roles: tuple[str, ...] = ()
+    operand_roles: Tuple[str, ...] = ()
 
 @dataclass
 class ParsedAsmLine:
@@ -41,13 +41,13 @@ class ParsedAsmLine:
     label: Optional[str] = None
     opcode: Optional[str] = None
     operands_str: str = ""
-    operands: list[str] = field(default_factory=list)
+    operands: List[str] = field(default_factory=list)
     comment: Optional[str] = None
     lineno: int = 0
     parse_status: ParseStatus = "valid"
 
     @property
-    def field_lengths(self) -> dict[str, int]:
+    def field_lengths(self) -> Dict[str, int]:
         """返回用于列宽统计的字段长度。"""
 
         return {
@@ -60,14 +60,14 @@ class ParsedAsmLine:
 def _spec_group(
     opcodes: str,
     *roles: str,
-) -> dict[str, InstructionSpec]:
+) -> Dict[str, InstructionSpec]:
     """批量创建具有相同操作数角色的指令规格。"""
 
     spec = InstructionSpec(len(roles), len(roles), roles)
     return {opcode: spec for opcode in opcodes.split()}
 
 
-INSTRUCTION_SPECS: dict[str, InstructionSpec] = {
+INSTRUCTION_SPECS: Dict[str, InstructionSpec] = {
     # 三操作数的寄存器运算：rd, rs1, rs2。
     **_spec_group(
         "add sub sll slt sltu xor srl sra or and "
@@ -182,7 +182,7 @@ def _is_metadata_label(label: Optional[str]) -> bool:
 
 def _split_comment(
     line: str,
-) -> tuple[str, Optional[str], bool]:
+) -> Tuple[str, Optional[str], bool]:
     """在字符串之外查找行尾注释。"""
 
     in_string = False
@@ -231,7 +231,7 @@ def _split_operands(
     text: str,
     *,
     allow_top_level_spaces: bool = False,
-) -> Optional[list[str]]:
+) -> Optional[List[str]]:
     """按顶层逗号拆分；格式异常时返回 None。
 
     普通指令的单个操作数不允许包含顶层空格，以便识别缺失逗号的
@@ -241,8 +241,8 @@ def _split_operands(
     if not text:
         return []
 
-    operands: list[str] = []
-    current: list[str] = []
+    operands: List[str] = []
+    current: List[str] = []
 
     in_string = False
     depth = 0
@@ -282,7 +282,7 @@ def _split_operands(
 
 def _split_label(
     code: str,
-) -> tuple[Optional[str], str, bool]:
+) -> Tuple[Optional[str], str, bool]:
     """提取可选标签并验证标签格式。"""
 
     stripped = code.strip()
@@ -302,7 +302,7 @@ def _split_label(
 def _status_for(
     label: Optional[str],
     opcode: Optional[str],
-    operands: list[str],
+    operands: List[str],
 ) -> ParseStatus:
     """根据 opcode 和操作数数量确定解析状态。
 
@@ -411,7 +411,7 @@ def parse_asm_line(
         parse_status=_status_for(label, opcode, operands),
     )
 
-def parse_asm(asm_text: str) -> list[ParsedAsmLine]:
+def parse_asm(asm_text: str) -> List[ParsedAsmLine]:
     """按原顺序解析完整汇编文本并记录行号。"""
 
     # 统一三种换行符后再逐行解析，raw 不包含换行符本身。

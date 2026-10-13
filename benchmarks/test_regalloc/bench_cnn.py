@@ -6,6 +6,8 @@ linear scan allocator, validates the output assembly, and optionally
 verifies execution via the RV32 emulator.
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import re

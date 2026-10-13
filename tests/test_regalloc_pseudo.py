@@ -1,5 +1,7 @@
 """Register-allocation tests for machine pseudo-instructions."""
 
+from typing import List
+
 import pytest
 
 from scratchv.backend import regalloc_linear, regalloc_linear_v1_5
@@ -55,7 +57,7 @@ def _run_rv32(assembly: str, instruction_limit: int = 16):
 
 def _allocate_and_run(
     allocator_module,
-    instructions: list[MachineInstr],
+    instructions: List[MachineInstr],
     *,
     instruction_limit: int = 16,
 ):

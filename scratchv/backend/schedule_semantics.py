@@ -278,8 +278,34 @@ class SchedInst:
     uses: frozenset[str] = frozenset()
     raw_line: str = ""
     region: int = 0
-    target: str | None = field(default=None, kw_only=True)
+    target: str | None = None
     effects: InstructionEffects = field(init=False)
+
+    __match_args__ = ("id", "opcode", "operands", "defines", "uses", "raw_line", "region")
+
+    def __init__(
+        self,
+        id: int,
+        opcode: str,
+        operands: tuple[str, ...] = (),
+        defines: frozenset[str] = frozenset(),
+        uses: frozenset[str] = frozenset(),
+        raw_line: str = "",
+        region: int = 0,
+        *,
+        target: str | None = None,
+    ) -> None:
+        # Python 3.8 has no keyword-only dataclass fields. Keep the public
+        # constructor's keyword-only target without changing frozen behavior.
+        object.__setattr__(self, "id", id)
+        object.__setattr__(self, "opcode", opcode)
+        object.__setattr__(self, "operands", operands)
+        object.__setattr__(self, "defines", defines)
+        object.__setattr__(self, "uses", uses)
+        object.__setattr__(self, "raw_line", raw_line)
+        object.__setattr__(self, "region", region)
+        object.__setattr__(self, "target", target)
+        self.__post_init__()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "opcode", self.opcode.lower())

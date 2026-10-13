@@ -143,7 +143,7 @@ def test_r3_all_variadic_inputs_and_single_input_are_preserved(
 ):
     schema = onnx.defs.get_schema(operator)
     assert schema.min_input == 1
-    assert schema.inputs[0].option is onnx.defs.OpSchema.FormalParameterOption.Variadic
+    assert schema.inputs[0].option == onnx.defs.OpSchema.FormalParameterOption.Variadic
     values = ([5.0, 3.0, 1.0, -2.0, -4.0] if operator == "Min"
               else [1.0, 3.0, 5.0, 7.0, 9.0])[:count]
     names = ["x" if parameter and index == 0 else f"c{index}" for index in range(count)]

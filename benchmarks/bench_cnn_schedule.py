@@ -272,12 +272,16 @@ def run_benchmark(model_path: Path = DEFAULT_MODEL, *, standalone_asm: Path | No
         }
         if any(value is False for value in primary["acceptance"].values()):
             primary["status"] = "failed"
+    try:
+        input_path = model_path.relative_to(ROOT).as_posix()
+    except ValueError:
+        input_path = str(model_path)
     return {
         "schema_version": 4, "benchmark_type": "cnn-scheduling-ab",
         "status": "passed" if all(c["status"] == "passed" for c in cases) else "failed",
         "validation_scope": "static_and_llvm" + ("_and_execution" if execute else ""),
         "whole_cnn_execution": primary["execution"]["status"],
-        "input": {"path": model_path.relative_to(ROOT).as_posix() if model_path.is_relative_to(ROOT) else str(model_path),
+        "input": {"path": input_path,
                   "sha256": sha256(model_bytes), "bytes": len(model_bytes), "nodes": len(model.graph.node),
                   "operators": dict(sorted(Counter(n.op_type for n in model.graph.node).items()))},
         "environment": {"python": platform.python_version(), "onnx": onnx.__version__,

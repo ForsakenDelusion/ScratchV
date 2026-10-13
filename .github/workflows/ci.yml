@@ -133,6 +133,32 @@ jobs:
           qemu-riscv32 --version
           $PY -c 'from scratchv.backend.llvm_mca import check_version; print(check_version("llvm-mca"))'
 
+      - name: Set up minimum supported Python
+        id: minimum_python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.8"
+          update-environment: false
+
+      - name: Run Topic 28 on minimum supported Python
+        env:
+          MINIMUM_PYTHON: ${{ steps.minimum_python.outputs.python-path }}
+          PYTHONHASHSEED: "0"
+          SCRATCHV_REQUIRE_RISCV_EXECUTION: "1"
+        run: |
+          set -euo pipefail
+          "$MINIMUM_PYTHON" -m venv "$RUNNER_TEMP/topic28-py38"
+          COMPAT_PYTHON="$RUNNER_TEMP/topic28-py38/bin/python"
+          "$COMPAT_PYTHON" -m pip install -e . "pytest>=7,<9"
+          mkdir -p benchmark_reports
+          "$COMPAT_PYTHON" -m pytest \
+            tests/test_topic28_python_compat.py \
+            tests/test_topic28_ir_frontend.py \
+            tests/test_topic28_acceptance.py \
+            tests/test_regalloc_result_reuse.py \
+            -v --tb=short \
+            --junit-xml=benchmark_reports/topic28_python38.xml
+
       # Includes scheduling and standalone CNN execution regressions.
       - name: Run all topic tests
         env:
@@ -235,6 +261,7 @@ jobs:
             benchmark_reports/ir_verifier_smoke/
             benchmark_reports/topic04_pass_manager.xml
             benchmark_reports/topic04_pass_manager.txt
+            benchmark_reports/topic28_python38.xml
           retention-days: 30
 
   # ═════════════════════════════════════════════════════════════════════════

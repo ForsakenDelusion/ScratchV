@@ -4,6 +4,8 @@
 Supported ops: Add, Mul, Sub, Div, Relu, MatMul, MaxPool, GeLU, Softmax, Neg, Exp
 """
 
+from __future__ import annotations
+
 import os
 
 import numpy as np

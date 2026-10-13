@@ -2,7 +2,7 @@
 
 **从 ONNX 到 RISC-V 机器码 — 一个你完全看得懂的 AI 编译器。**
 
-[![Python](https://img.shields.io/badge/python-3.12+-blue)](https://python.org)
+[![Python](https://img.shields.io/badge/python-3.8+-blue)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![CI](https://github.com/ScratchV-Compiler/ScratchV/actions/workflows/ci.yml/badge.svg)](https://github.com/ScratchV-Compiler/ScratchV/actions)
 [![Docs](https://img.shields.io/badge/docs-课程站点-blue)](https://scratchv-compiler.github.io/ScratchV/docs/)

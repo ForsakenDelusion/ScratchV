@@ -83,6 +83,7 @@ docs/
 
 ## 代码风格
 
-- Python 3.12+, type hints
+- Python 3.8+ compatible, type hints；版本与注解规则以 `CONTRIBUTING.md` 为准。
+- 涉及版本敏感 API 的修改，必须用 Python 3.8 验证导入及相关测试。CI 主环境使用 3.12，Topic 28 另有 3.8 兼容测试。
 - argparse CLI: `--json` (bool, stdout), `--json-output` (path), `--markdown` (path)
 - 报告工具: HTML/JSON/MD 三种格式，零外部可视化依赖

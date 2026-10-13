@@ -1,5 +1,7 @@
 """Functional unit tests for semantic RISC-V instruction comments."""
 
+from __future__ import annotations
+
 import pytest
 
 from scratchv.backend.asm_beautifier import (

@@ -5,6 +5,8 @@ Forces the linear scan allocator to spill by providing more virtual
 registers than physical registers.
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import random

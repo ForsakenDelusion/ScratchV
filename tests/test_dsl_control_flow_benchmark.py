@@ -1,5 +1,7 @@
 """Exercise the Topic 01 benchmark through its public CLI."""
 
+from __future__ import annotations
+
 import json
 import html
 import subprocess

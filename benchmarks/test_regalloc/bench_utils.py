@@ -1,6 +1,8 @@
 # flake8: noqa
 """Common used benchmark utils for all benchmarks"""
 
+from __future__ import annotations
+
 # Common used constants
 _CALLEE_SAVED = {
     "ra",

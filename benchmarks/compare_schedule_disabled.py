@@ -28,8 +28,10 @@ def collect(root: Path) -> dict:
     from scratchv.standalone.onnx_to_riscv_standalone import convert_onnx_to_riscv
     from scripts.run_topic06_benchmarks import run_simulation
 
-    if not Path(compiler.__file__).resolve().is_relative_to(root):
-        raise RuntimeError("Compiler imported outside the selected checkout")
+    try:
+        Path(compiler.__file__).resolve().relative_to(root)
+    except ValueError:
+        raise RuntimeError("Compiler imported outside the selected checkout") from None
     cases = sorted((root / "benchmarks/cases").glob("*.dsl"))
     cases += sorted((root / "tests/topic06/cases").rglob("*.dsl"))
     cases.append(root / "models/graph/cnn.onnx")

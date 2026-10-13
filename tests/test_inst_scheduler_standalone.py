@@ -59,7 +59,8 @@ def input_values(shape, seed):
 
 def fixed_tensor(name, values):
     # Powers-of-two scaling is exact; small products avoid int32 overflow.
-    return numpy_helper.from_array(np.asarray(values, dtype=np.float32) / 65536, name)
+    scaled = np.asarray(values, dtype=np.float32) / np.float32(65536)
+    return numpy_helper.from_array(scaled, name)
 
 
 def conv_reference(x, weights, bias, stride, pad):

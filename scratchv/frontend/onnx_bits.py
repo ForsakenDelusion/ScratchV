@@ -6,9 +6,10 @@ Wire format: https://protobuf.dev/programming-guides/encoding/
 """
 
 from pathlib import Path
+from typing import Dict, Tuple
 
 
-def _varint(data: bytes, position: int) -> tuple[int, int]:
+def _varint(data: bytes, position: int) -> Tuple[int, int]:
     value = 0
     for shift in range(0, 70, 7):
         if position >= len(data):
@@ -66,7 +67,7 @@ def _int32(payload: bytes) -> int:
     return value - (1 << 32) if value & (1 << 31) else value
 
 
-def typed_initializer_bits(model_path: str, onnx) -> dict[tuple[str, int], int]:
+def typed_initializer_bits(model_path: str, onnx) -> Dict[Tuple[str, int], int]:
     """Preserve packed/unpacked float_data and double_data scalar encodings.
 
     Reading the original file also avoids the pure-Python protobuf decoder's

@@ -5,6 +5,8 @@ Verifies that the linear scan allocator produces zero spills when
 physical registers are plentiful.
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import random

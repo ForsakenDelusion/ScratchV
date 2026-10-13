@@ -64,8 +64,12 @@ def parse_worker(args: argparse.Namespace) -> dict:
     from scratchv.frontend import dsl_extended
 
     parser_file = Path(dsl_extended.__file__).resolve()
-    if not parser_file.is_relative_to(args.worker_root):
-        raise RuntimeError(f"parser imported outside selected checkout: {parser_file}")
+    try:
+        parser_file.relative_to(args.worker_root)
+    except ValueError:
+        raise RuntimeError(
+            f"parser imported outside selected checkout: {parser_file}"
+        ) from None
     paths = sorted(args.cases.glob("*.dsl"))
     if not paths:
         raise ValueError(f"no DSL cases in {args.cases}")

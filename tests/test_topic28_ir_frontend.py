@@ -1,5 +1,7 @@
 """Extended instruction-selection IR and DSL coverage."""
 
+from typing import Tuple
+
 import pytest
 
 from scratchv.analysis.ir_verifier import verify_ir
@@ -153,7 +155,7 @@ def test_dsl_const_rejects_unsupported_or_invalid_values(source):
 
 def _extension_program(
     opcode: OpCode,
-    operand_types: tuple[DataType, ...],
+    operand_types: Tuple[DataType, ...],
     result_type: DataType,
 ) -> Program:
     operands = [

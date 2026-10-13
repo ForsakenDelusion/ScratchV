@@ -1,5 +1,7 @@
 """LLVM timing contract and standalone execution regressions."""
 
+from __future__ import annotations
+
 from copy import deepcopy
 import json
 import shutil
