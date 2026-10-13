@@ -105,6 +105,7 @@ class IRBuilder:
     def _binary_arith(
             self, opcode: OpCode, lhs: Value, rhs: Value,
             supported_types: frozenset[DataType] | None = None,
+            **attrs,
     ) -> Value:
         if lhs.dtype != rhs.dtype:
             raise ValueError(
@@ -116,7 +117,7 @@ class IRBuilder:
             )
         self.reserve_names([lhs.name, rhs.name])
         dest = self.make_value(dtype=lhs.dtype)
-        self._emit(opcode, dest, [lhs, rhs])
+        self._emit(opcode, dest, [lhs, rhs], **attrs)
         return dest
 
     def _unary_arith(
@@ -149,14 +150,18 @@ class IRBuilder:
             OpCode.REM, lhs, rhs, frozenset({DataType.INT32}),
         )
 
-    def min(self, lhs: Value, rhs: Value) -> Value:
+    def min(self, lhs: Value, rhs: Value, *, propagate_nan: bool = False) -> Value:
+        """Minimum; ONNX requests NaN propagation, DSL selects the number."""
         return self._binary_arith(
             OpCode.MIN, lhs, rhs, _MIN_MAX_ABS_TYPES,
+            **({"propagate_nan": True} if propagate_nan else {}),
         )
 
-    def max(self, lhs: Value, rhs: Value) -> Value:
+    def max(self, lhs: Value, rhs: Value, *, propagate_nan: bool = False) -> Value:
+        """Maximum; ONNX requests NaN propagation, DSL selects the number."""
         return self._binary_arith(
             OpCode.MAX, lhs, rhs, _MIN_MAX_ABS_TYPES,
+            **({"propagate_nan": True} if propagate_nan else {}),
         )
 
     def neg(self, val: Value) -> Value:

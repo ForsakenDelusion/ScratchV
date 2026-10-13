@@ -5,8 +5,10 @@ import struct
 import subprocess
 
 import onnx
+import numpy as np
 import pytest
 from onnx import TensorProto as TP, helper
+from onnx.reference import ReferenceEvaluator
 
 from scratchv.analysis.ir_verifier import verify_ir
 from scratchv.backend.abi_frame import apply_abi_frames
@@ -82,9 +84,12 @@ def test_t12_typed_wire_bits_and_flags(target, packed, pattern, operation, tmp_p
     result = CompilerDriver(configuration("greedy", "all", True, isa=isa, abi=abi)).compile(
         str(path), str(tmp_path / "out.s"))
     assert result.success, result.errors
-    two = 0x40000000 if dtype is T.FLOAT32 else 0x4000000000000000
+    canonical_nan = 0x7FC00000 if dtype is T.FLOAT32 else 0x7FF8000000000000
+    if operation == "Min" and pattern != "negative_zero":
+        with np.errstate(invalid="ignore"):
+            assert np.isnan(ReferenceEvaluator(onnx.load(path)).run(None, {})[0]).all()
     expected = (raw, 0) if operation == "return" or pattern == "negative_zero" else (
-        two, 0x10 if pattern == "snan" else 0)
+        canonical_nan, 0x10 if pattern == "snan" else 0)
     assert observe(result.output_text, tmp_path, dtype, function=".wire_model",
         isa=isa, abi=abi, separate=True) == expected
 

@@ -1,5 +1,7 @@
 # ScratchV engineering memory
 
+[2026-10-13] ONNX 浮点 Min/Max 的 NaN 传播不同于 RISC-V fmin/fmax 选择正常数字的规则，IR 必须保留来源要求，不能只按同名算子映射。用 ONNX 官方参考实现核对合法模型，再实际执行目标程序；同时检查 qNaN/sNaN 标志、普通数/无穷大和既有 DSL 行为。NaN 补偿运算只能在 NaN 路径执行，否则额外加法会引入溢出或 invalid；值参照工具也要遵循同一 IR 标记和目标符号零约定。
+
 [2026-09-18] 课题 01 的解析成功和块数检查不能证明控制流执行正确；验收须核对比较契约、分支合流、循环变量更新与零次路径。当前 DSLInterpreter 的分支处理为空操作，不可作为控制流执行 oracle；未更新条件变量的旧 while 示例仅适合解析测试。
 
 [2026-09-13] DSL benchmark 的详细日志按用例使用默认关闭的 details/summary 折叠，汇总表、失败检查和性能提示保留在外层；GitHub Markdown 与本地 HTML 均需支持，HTML 中的诊断源码必须转义。

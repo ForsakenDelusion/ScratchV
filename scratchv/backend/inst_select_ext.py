@@ -290,6 +290,39 @@ class ExtendedInstructionSelector(InstructionSelector):
     # min / max
     # ------------------------------------------------------------------
 
+    def _select_fp_min_max(self, instr: Instruction) -> None:
+        """Use minimumNumber/maximumNumber, optionally propagating ONNX NaNs.
+
+        Quiet self-comparisons identify NaNs without setting NV for qNaN.
+        Only the NaN path adds the operands to produce a canonical quiet NaN;
+        adding finite values or opposite infinities would change fflags.
+        """
+        dtype = self._float_dtype(instr)
+        self._require_fp_extension(instr.opcode, dtype)
+        double = dtype is DataType.FLOAT64
+        if instr.opcode is OpCode.MIN:
+            op = MachineOp.FMIN_D if double else MachineOp.FMIN_S
+        else:
+            op = MachineOp.FMAX_D if double else MachineOp.FMAX_S
+        dst, lhs, rhs = self._fp_dst(instr), self._fp_op(instr, 0), self._fp_op(instr, 1)
+        self._emit(op, dst, lhs, rhs, comment=op.value)
+        if not instr.attrs.get("propagate_nan", False):
+            return
+        compare = MachineOp.FEQ_D if double else MachineOp.FEQ_S
+        lhs_number = self._fresh_vreg("minmax_lhs_number")
+        rhs_number = self._fresh_vreg("minmax_rhs_number")
+        both_numbers = self._fresh_vreg("minmax_both_numbers")
+        done = self._fresh_label("minmax_done")
+        self._emit(compare, lhs_number, lhs, lhs, comment="ONNX: lhs is not NaN")
+        self._emit(compare, rhs_number, rhs, rhs, comment="ONNX: rhs is not NaN")
+        self._emit(MachineOp.AND, both_numbers, lhs_number, rhs_number)
+        self._emit(MachineOp.BNEZ, both_numbers, target=done)
+        self._emit(
+            MachineOp.FADD_D if double else MachineOp.FADD_S,
+            dst, lhs, rhs, rounding_mode="rne", comment="ONNX: propagate NaN",
+        )
+        self._emit_label(done)
+
     def _select_min(self, instr: Instruction) -> None:
         """Select instruction for min(a, b).
 
@@ -301,20 +334,8 @@ class ExtendedInstructionSelector(InstructionSelector):
             xor dst, b, selected # a if a < b, otherwise b
         """
         dtype = instr.dest.dtype if instr.dest is not None else None
-        if dtype == DataType.FLOAT64:
-            self._require_fp_extension(OpCode.MIN, dtype)
-            self._emit(
-                MachineOp.FMIN_D, self._fp_dst(instr),
-                self._fp_op(instr, 0), self._fp_op(instr, 1),
-                comment="fmin.d",
-            )
-        elif dtype == DataType.FLOAT32:
-            self._require_fp_extension(OpCode.MIN, dtype)
-            self._emit(
-                MachineOp.FMIN_S, self._fp_dst(instr),
-                self._fp_op(instr, 0), self._fp_op(instr, 1),
-                comment="fmin.s",
-            )
+        if dtype in (DataType.FLOAT32, DataType.FLOAT64):
+            self._select_fp_min_max(instr)
         elif dtype == DataType.INT32:
             a = self._op(instr, 0)
             b = self._op(instr, 1)
@@ -354,20 +375,8 @@ class ExtendedInstructionSelector(InstructionSelector):
         Integer max uses the same full-width-mask selection scheme as min.
         """
         dtype = instr.dest.dtype if instr.dest is not None else None
-        if dtype == DataType.FLOAT64:
-            self._require_fp_extension(OpCode.MAX, dtype)
-            self._emit(
-                MachineOp.FMAX_D, self._fp_dst(instr),
-                self._fp_op(instr, 0), self._fp_op(instr, 1),
-                comment="fmax.d",
-            )
-        elif dtype == DataType.FLOAT32:
-            self._require_fp_extension(OpCode.MAX, dtype)
-            self._emit(
-                MachineOp.FMAX_S, self._fp_dst(instr),
-                self._fp_op(instr, 0), self._fp_op(instr, 1),
-                comment="fmax.s",
-            )
+        if dtype in (DataType.FLOAT32, DataType.FLOAT64):
+            self._select_fp_min_max(instr)
         elif dtype == DataType.INT32:
             a = self._op(instr, 0)
             b = self._op(instr, 1)

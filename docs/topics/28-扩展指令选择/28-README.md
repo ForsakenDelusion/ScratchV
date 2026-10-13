@@ -48,7 +48,8 @@ SCRATCHV_REQUIRE_RISCV_EXECUTION=1 python -m pytest -q tests/test_topic28_accept
 ## 数值语义与边界
 
 - 整数除法向零截断，余数与被除数同号：`div(-17,5)=-3`，`mod(-17,5)=-2`。除零及 `INT32_MIN/-1` 使用 RV32M 定义，不插入陷阱。
-- 浮点算术和平方根固定使用 `rne`（最近值、相同距离取偶数）。`min/max` 使用 RISC-V 的 NaN、符号零及异常标志语义，不能用 Python `min/max` 直接替代。
+- 浮点算术和平方根固定使用 `rne`（最近值、相同距离取偶数）。DSL 的 `min/max` 使用 RISC-V 的 NaN、符号零及异常标志语义，不能用 Python `min/max` 直接替代。
+- ONNX 浮点 Min/Max 保留 NaN：任意输入为 NaN，结果就是 NaN，变长输入逐对保留这条规则；运算产生规范化的 quiet NaN，sNaN 设置 invalid 标志。非 NaN 输入继续使用 RISC-V 的符号零规则（Min 选择 −0，Max 选择 +0）；本次 NaN 修复不改变这项既有目标约定。
 - 硬浮点交付产物是合法 F/D 汇编，执行验证使用 QEMU；内置 encoder/emulator 目前仅支持 RV32IM。
 - ONNX 硬浮点入口处理标量，支持至多一个标量浮点参数；每个函数的栈帧上限为 2032 字节。
 - ONNX initializer 与 graph input 同名时，当前接口冻结 initializer，不生成可覆盖参数；不提供运行时覆盖。这是既有入口政策，ONNX 规范允许实现选择是否提供覆盖。

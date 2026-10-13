@@ -157,13 +157,16 @@ def test_t12_onnx_snan_arithmetic_sets_invalid(dtype, isa, abi, operation, tmp_p
     array = np.asarray(raw, dtype=np.uint32 if dtype is T.FLOAT32 else np.uint64).view(
         np.float32 if dtype is T.FLOAT32 else np.float64)
     nt = TensorProto.FLOAT if dtype is T.FLOAT32 else TensorProto.DOUBLE
-    path, _ = save_model(helper.make_graph([helper.make_node(operation, ["a", "b"], ["out"])],
+    path, model = save_model(helper.make_graph([helper.make_node(operation, ["a", "b"], ["out"])],
         "main", [], [helper.make_tensor_value_info("out", nt, [])],
         [numpy_helper.from_array(array, name="a"), numpy_helper.from_array(
             np.asarray(2.0, dtype=array.dtype), name="b")]), tmp_path)
+    with np.errstate(invalid="ignore"):
+        assert np.isnan(ReferenceEvaluator(model).run(None, {})[0]).all()
     result = CompilerDriver(config("greedy", "all", True, isa=isa, abi=abi)).compile(str(path), str(tmp_path / "out.s"))
     assert result.success, result.errors
-    assert observe(result.output_text, tmp_path, dtype, isa=isa, abi=abi) == (float_bits(2.0, dtype), 0x10)
+    canonical_nan = 0x7FC00000 if dtype is T.FLOAT32 else 0x7FF8000000000000
+    assert observe(result.output_text, tmp_path, dtype, isa=isa, abi=abi) == (canonical_nan, 0x10)
 
 
 @pytest.mark.parametrize("name", ["_zero", "__scratchv_peephole_zero_1", "__scratchv_peephole_zero_2"])
