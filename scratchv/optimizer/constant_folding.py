@@ -19,7 +19,7 @@ class ConstantFolder(OptimizationPass):
     targets: Python arithmetic does not model binary32 operand quantization,
     target rounding modes, or fflags. The default retains the legacy stub
     pipeline's historical behavior; CompilerDriver enables the safe policy
-    for extended instruction selection, including explicitly selected passes.
+    for extended instruction selection and LLVM, including explicit passes.
     """
 
     name = "constant-folding"
