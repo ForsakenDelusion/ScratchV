@@ -501,7 +501,7 @@ class CompilerDriver:
             passes=self.config.passes,
             disabled_passes=self.config.disabled_passes,
         )
-        if self.config.use_extended_isel:
+        if self.config.use_extended_isel or self.config.backend == "llvm":
             from scratchv.optimizer.constant_folding import ConstantFolder
             from scratchv.optimizer.dead_code import DeadCodeEliminator
             from scratchv.optimizer.licm import LICM
@@ -510,6 +510,8 @@ class CompilerDriver:
 
             # Presets and explicit --passes pipelines share the same guard.
             # Folding/peephole/DCE/LICM need the target IEEE rounding/fflags policy.
+            # LLVM also evaluates typed FP operations: host folding must not
+            # bypass binary32 operand rounding or change encoded constants.
             # Fusion is now a registered no-op until a valid IR/lowering
             # exists. Never relax verification to accept the old pseudo.
             for pass_ in manager.passes:

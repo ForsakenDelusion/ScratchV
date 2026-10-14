@@ -6,8 +6,11 @@ No external dependencies beyond Python — the output is standard LLVM IR.
 
 from __future__ import annotations
 
+import struct
+
 from scratchv.ir.types import (
     OpCode, DataType, Value, Instruction, BasicBlock, Function, Program,
+    valid_float_bit_pattern,
 )
 
 
@@ -306,7 +309,16 @@ class LLVMCodegen:
         assert isinstance(raw_val, (int, float))
         val: float | int = raw_val
         ty = _llvm_type(instr.dest.dtype) if instr.dest else "float"
-        self._p(f"  {dst} = fadd {ty} {_llvm_const_val(val, ty)}, 0.0")
+        raw_bits = instr.attrs.get("bit_pattern")
+        value_bits = instr.dest.bit_pattern if instr.dest is not None else None
+        if raw_bits is not None and value_bits is not None and raw_bits != value_bits:
+            raise ValueError("constant bit_pattern differs from result metadata")
+        integer_type, bits = _llvm_float_bits(
+            val,
+            ty,
+            bit_pattern=raw_bits if raw_bits is not None else value_bits,
+        )
+        self._p(f"  {dst} = bitcast {integer_type} {bits} to {ty}")
 
     def _emit_load(self, instr: Instruction) -> None:
         dst = self._dest(instr)
@@ -618,11 +630,34 @@ def _llvm_const(val: Value) -> str:
     if val.const_value is not None:
         cv = val.const_value
         assert isinstance(cv, (float, int))
-        return _llvm_const_val(cv, _llvm_type(val.dtype))
+        return _llvm_const_val(cv, _llvm_type(val.dtype), bit_pattern=val.bit_pattern)
     return "0.0"
 
 
-def _llvm_const_val(value: float | int, ty: str) -> str:
+def _llvm_const_val(
+    value: float | int, ty: str, *, bit_pattern: int | None = None
+) -> str:
     if ty in ("float", "double"):
-        return f"{float(value):e}"
+        integer_type, bits = _llvm_float_bits(value, ty, bit_pattern=bit_pattern)
+        return f"bitcast ({integer_type} {bits} to {ty})"
+    if bit_pattern is not None:
+        raise ValueError("bit_pattern requires an f32/f64 constant")
     return str(int(value))
+
+
+def _llvm_float_bits(
+    value: float | int, ty: str, *, bit_pattern: object = None
+) -> tuple[str, int]:
+    """Encode the declared precision without rounding through decimal text."""
+    integer_type = "i32" if ty == "float" else "i64"
+    if bit_pattern is not None:
+        dtype = DataType.FLOAT32 if ty == "float" else DataType.FLOAT64
+        if not isinstance(bit_pattern, int) or not valid_float_bit_pattern(
+            dtype, bit_pattern
+        ):
+            raise ValueError(f"invalid {dtype.value} constant bit_pattern")
+        return integer_type, bit_pattern
+    number = float(value)
+    format_ = "<f" if ty == "float" else "<d"
+    encoded = struct.pack(format_, number)
+    return integer_type, int.from_bytes(encoded, "little")
