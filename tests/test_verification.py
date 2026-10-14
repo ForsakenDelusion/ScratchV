@@ -66,20 +66,26 @@ class TestDSLInterpreter:
     def test_simple_add(self):
         dsl = "y = add(a, b)\nreturn y"
         interpreter = DSLInterpreter()
-        result = interpreter.run(dsl, {
-            "a": np.array([1.0, 2.0]),
-            "b": np.array([3.0, 4.0]),
-        })
+        result = interpreter.run(
+            dsl,
+            {
+                "a": np.array([1.0, 2.0]),
+                "b": np.array([3.0, 4.0]),
+            },
+        )
         np.testing.assert_array_equal(result, np.array([4.0, 6.0]))
 
     def test_mul_then_add(self):
         dsl = "t = mul(a, b)\ny = add(t, c)\nreturn y"
         interpreter = DSLInterpreter()
-        result = interpreter.run(dsl, {
-            "a": np.float64(2.0),
-            "b": np.float64(3.0),
-            "c": np.float64(1.0),
-        })
+        result = interpreter.run(
+            dsl,
+            {
+                "a": np.float64(2.0),
+                "b": np.float64(3.0),
+                "c": np.float64(1.0),
+            },
+        )
         assert abs(result - 7.0) < 1e-6
 
     def test_relu(self):
@@ -144,7 +150,9 @@ return y
         [("f32", np.float32), ("f64", np.float64)],
     )
     def test_extended_float_min_max_abs_preserve_dtype(
-        self, dtype, numpy_dtype,
+        self,
+        dtype,
+        numpy_dtype,
     ):
         dsl = f"""
 a = const(-2.5, dtype:{dtype})
@@ -161,8 +169,10 @@ return y
         assert float(result) == 1.25
 
 
-def test_ir_trace_executor_supports_extended_integer_operations():
-    program = DSLParser().parse("""
+class TestIRTraceExtendedOperations:
+    def test_ir_trace_executor_supports_extended_integer_operations(self):
+        program = DSLParser().parse(
+            """
 a = const(-17, dtype:i32)
 b = const(5, dtype:i32)
 r = rem(a, b)
@@ -170,31 +180,35 @@ lo = min(r, b)
 hi = max(lo, a)
 y = abs(hi)
 return y
-""")
+"""
+        )
 
-    result = IRTraceExecutor(program).run({})
+        result = IRTraceExecutor(program).run({})
 
-    assert result.dtype == np.int32
-    assert int(result) == 2
+        assert result.dtype == np.int32
+        assert int(result) == 2
 
-
-@pytest.mark.parametrize(
-    ("dtype", "numpy_dtype"),
-    [("f32", np.float32), ("f64", np.float64)],
-)
-def test_ir_trace_executor_supports_extended_float_operations(
-    dtype, numpy_dtype,
-):
-    program = DSLParser().parse(f"""
+    @pytest.mark.parametrize(
+        ("dtype", "numpy_dtype"),
+        [("f32", np.float32), ("f64", np.float64)],
+    )
+    def test_ir_trace_executor_supports_extended_float_operations(
+        self,
+        dtype,
+        numpy_dtype,
+    ):
+        program = DSLParser().parse(
+            f"""
 a = const(-2.5, dtype:{dtype})
 b = const(1.25, dtype:{dtype})
 lo = min(a, b)
 hi = max(lo, b)
 y = abs(hi)
 return y
-""")
+"""
+        )
 
-    result = IRTraceExecutor(program).run({})
+        result = IRTraceExecutor(program).run({})
 
-    assert result.dtype == numpy_dtype
-    assert float(result) == 1.25
+        assert result.dtype == numpy_dtype
+        assert float(result) == 1.25
