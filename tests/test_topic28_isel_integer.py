@@ -72,8 +72,7 @@ def _execute_integer_sequence(
             result = _signed32(read(instruction.src1)) >> read(instruction.src2)
         elif instruction.op == MachineOp.SLT:
             result = int(
-                _signed32(read(instruction.src1))
-                < _signed32(read(instruction.src2))
+                _signed32(read(instruction.src1)) < _signed32(read(instruction.src2))
             )
         elif instruction.op == MachineOp.SUB:
             result = read(instruction.src1) - read(instruction.src2)
@@ -87,117 +86,117 @@ def _execute_integer_sequence(
     return registers
 
 
-@pytest.mark.parametrize(
-    "selector_type", [InstructionSelector, ExtendedInstructionSelector]
-)
-def test_div_materializes_both_constant_sources(selector_type: type) -> None:
-    lhs = _constant("lhs", -17)
-    rhs = _constant("rhs", 5)
-    dst = Value("quotient", DataType.INT32)
-    instruction = Instruction(OpCode.DIV, dst, [lhs, rhs])
-
-    instructions = selector_type(_program_with(instruction)).run()
-    div = next(item for item in instructions if item.op == MachineOp.DIV)
-
-    assert div.src1 is not None and div.src1.kind == "vreg"
-    assert div.src2 is not None and div.src2.kind == "vreg"
-    assert [item.op for item in instructions].count(MachineOp.LI) == 2
-
-
-def test_rem_materializes_constant_sources_before_register_only_rem() -> None:
-    lhs = _constant("lhs", -17)
-    rhs = _constant("rhs", 5)
-    dst = Value("remainder", DataType.INT32)
-    instruction = Instruction(OpCode.REM, dst, [lhs, rhs])
-    selector = ExtendedInstructionSelector(_program_with(instruction))
-
-    instructions = selector.run()
-    rem = next(item for item in instructions if item.op == MachineOp.REM)
-
-    assert rem.op == MachineOp.REM
-    assert rem.src1 is not None and rem.src1.kind == "vreg"
-    assert rem.src2 is not None and rem.src2.kind == "vreg"
-    rem_index = instructions.index(rem)
-    assert [item.op for item in instructions[rem_index - 2:rem_index]] == [
-        MachineOp.LI, MachineOp.LI,
-    ]
-
-
-@pytest.mark.parametrize(
-    ("opcode", "lhs", "rhs", "expected"),
-    [
-        (OpCode.MIN, I32_MIN, 0, I32_MIN),
-        (OpCode.MIN, 7, -9, -9),
-        (OpCode.MIN, I32_MAX, I32_MAX, I32_MAX),
-        (OpCode.MAX, I32_MAX, 0, I32_MAX),
-        (OpCode.MAX, -7, 9, 9),
-        (OpCode.MAX, I32_MIN, I32_MIN, I32_MIN),
-    ],
-)
-def test_min_max_full_width_mask_sequences(
-    opcode: OpCode, lhs: int, rhs: int, expected: int
-) -> None:
-    left = Value("left", DataType.INT32)
-    right = Value("right", DataType.INT32)
-    result = Value("result", DataType.INT32)
-    instruction = Instruction(opcode, result, [left, right])
-    selector = ExtendedInstructionSelector(
-        _program_with(instruction, left, right, result)
+class TestIntegerInstructionSelection:
+    @pytest.mark.parametrize(
+        "selector_type", [InstructionSelector, ExtendedInstructionSelector]
     )
+    def test_div_materializes_both_constant_sources(self, selector_type: type) -> None:
+        lhs = _constant("lhs", -17)
+        rhs = _constant("rhs", 5)
+        dst = Value("quotient", DataType.INT32)
+        instruction = Instruction(OpCode.DIV, dst, [lhs, rhs])
 
-    selector.run()
-    registers = _execute_integer_sequence(
-        selector._instructions, {"left": lhs, "right": rhs}
+        instructions = selector_type(_program_with(instruction)).run()
+        div = next(item for item in instructions if item.op == MachineOp.DIV)
+
+        assert div.src1 is not None and div.src1.kind == "vreg"
+        assert div.src2 is not None and div.src2.kind == "vreg"
+        assert [item.op for item in instructions].count(MachineOp.LI) == 2
+
+    def test_rem_materializes_constant_sources_before_register_only_rem(self) -> None:
+        lhs = _constant("lhs", -17)
+        rhs = _constant("rhs", 5)
+        dst = Value("remainder", DataType.INT32)
+        instruction = Instruction(OpCode.REM, dst, [lhs, rhs])
+        selector = ExtendedInstructionSelector(_program_with(instruction))
+
+        instructions = selector.run()
+        rem = next(item for item in instructions if item.op == MachineOp.REM)
+
+        assert rem.op == MachineOp.REM
+        assert rem.src1 is not None and rem.src1.kind == "vreg"
+        assert rem.src2 is not None and rem.src2.kind == "vreg"
+        rem_index = instructions.index(rem)
+        assert [item.op for item in instructions[rem_index - 2 : rem_index]] == [
+            MachineOp.LI,
+            MachineOp.LI,
+        ]
+
+    @pytest.mark.parametrize(
+        ("opcode", "lhs", "rhs", "expected"),
+        [
+            (OpCode.MIN, I32_MIN, 0, I32_MIN),
+            (OpCode.MIN, 7, -9, -9),
+            (OpCode.MIN, I32_MAX, I32_MAX, I32_MAX),
+            (OpCode.MAX, I32_MAX, 0, I32_MAX),
+            (OpCode.MAX, -7, 9, 9),
+            (OpCode.MAX, I32_MIN, I32_MIN, I32_MIN),
+        ],
     )
+    def test_min_max_full_width_mask_sequences(
+        self, opcode: OpCode, lhs: int, rhs: int, expected: int
+    ) -> None:
+        left = Value("left", DataType.INT32)
+        right = Value("right", DataType.INT32)
+        result = Value("result", DataType.INT32)
+        instruction = Instruction(opcode, result, [left, right])
+        selector = ExtendedInstructionSelector(
+            _program_with(instruction, left, right, result)
+        )
 
-    assert _signed32(registers["result"]) == expected
-    mask_builders = [
-        item
-        for item in selector._instructions
-        if item.op == MachineOp.SUB
-        and item.src1 == MachineOperand.reg("x0")
-    ]
-    assert len(mask_builders) == 1
+        selector.run()
+        registers = _execute_integer_sequence(
+            selector._instructions, {"left": lhs, "right": rhs}
+        )
 
+        assert _signed32(registers["result"]) == expected
+        mask_builders = [
+            item
+            for item in selector._instructions
+            if item.op == MachineOp.SUB and item.src1 == MachineOperand.reg("x0")
+        ]
+        assert len(mask_builders) == 1
 
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [(0, 0), (19, 19), (-19, 19), (I32_MIN, I32_MIN)],
-)
-def test_abs_sequence_preserves_rv32_twos_complement_semantics(
-    value: int, expected: int
-) -> None:
-    source = Value("source", DataType.INT32)
-    result = Value("result", DataType.INT32)
-    instruction = Instruction(OpCode.ABS, result, [source])
-    selector = ExtendedInstructionSelector(_program_with(instruction, source, result))
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [(0, 0), (19, 19), (-19, 19), (I32_MIN, I32_MIN)],
+    )
+    def test_abs_sequence_preserves_rv32_twos_complement_semantics(
+        self, value: int, expected: int
+    ) -> None:
+        source = Value("source", DataType.INT32)
+        result = Value("result", DataType.INT32)
+        instruction = Instruction(OpCode.ABS, result, [source])
+        selector = ExtendedInstructionSelector(
+            _program_with(instruction, source, result)
+        )
 
-    selector.run()
-    registers = _execute_integer_sequence(selector._instructions, {"source": value})
+        selector.run()
+        registers = _execute_integer_sequence(selector._instructions, {"source": value})
 
-    assert _signed32(registers["result"]) == expected
+        assert _signed32(registers["result"]) == expected
 
+    def test_selector_temporaries_do_not_collide_with_ir_names(self) -> None:
+        adversarial_name = "__scratchv_abs_sign_1"
+        source = Value(adversarial_name, DataType.INT32)
+        result = Value("result", DataType.INT32)
+        instruction = Instruction(OpCode.ABS, result, [source])
+        selector = ExtendedInstructionSelector(
+            _program_with(instruction, source, result)
+        )
 
-def test_selector_temporaries_do_not_collide_with_ir_names() -> None:
-    adversarial_name = "__scratchv_abs_sign_1"
-    source = Value(adversarial_name, DataType.INT32)
-    result = Value("result", DataType.INT32)
-    instruction = Instruction(OpCode.ABS, result, [source])
-    selector = ExtendedInstructionSelector(_program_with(instruction, source, result))
+        selector.run()
+        generated_defs = {
+            str(item.dst.value)
+            for item in selector._instructions
+            if item.dst is not None and item.dst.kind == "vreg"
+        }
 
-    selector.run()
-    generated_defs = {
-        str(item.dst.value)
-        for item in selector._instructions
-        if item.dst is not None and item.dst.kind == "vreg"
-    }
+        assert adversarial_name not in generated_defs
 
-    assert adversarial_name not in generated_defs
+    def test_extended_ir_surface_does_not_advertise_idiv_or_mod(self) -> None:
+        selector = ExtendedInstructionSelector(Program())
 
-
-def test_extended_ir_surface_does_not_advertise_idiv_or_mod() -> None:
-    selector = ExtendedInstructionSelector(Program())
-
-    assert "rem" in selector.supported_ops
-    assert "idiv" not in selector.supported_ops
-    assert "mod" not in selector.supported_ops
+        assert "rem" in selector.supported_ops
+        assert "idiv" not in selector.supported_ops
+        assert "mod" not in selector.supported_ops

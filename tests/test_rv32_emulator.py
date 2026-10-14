@@ -39,26 +39,30 @@ def _run_integer_assembly(assembly: str) -> RV32Emulator:
     return emulator
 
 
-def test_div_and_rem_use_signed_riscv_semantics() -> None:
-    emulator = _run_integer_assembly("""\
+class TestRV32IntegerArithmetic:
+    def test_div_and_rem_use_signed_riscv_semantics(self) -> None:
+        emulator = _run_integer_assembly(
+            """\
 li t0, -17
 li t1, 5
 div t2, t0, t1
 rem t3, t0, t1
 ret
-""")
+"""
+        )
 
-    assert emulator.regs[REG_ID["t2"]] == (-3 & 0xFFFFFFFF)
-    assert emulator.regs[REG_ID["t3"]] == (-2 & 0xFFFFFFFF)
+        assert emulator.regs[REG_ID["t2"]] == (-3 & 0xFFFFFFFF)
+        assert emulator.regs[REG_ID["t3"]] == (-2 & 0xFFFFFFFF)
 
-
-def test_rem_divide_by_zero_and_srai_follow_rv32() -> None:
-    emulator = _run_integer_assembly("""\
+    def test_rem_divide_by_zero_and_srai_follow_rv32(self) -> None:
+        emulator = _run_integer_assembly(
+            """\
 li t0, -17
 rem t1, t0, zero
 srai t2, t0, 31
 ret
-""")
+"""
+        )
 
-    assert emulator.regs[REG_ID["t1"]] == (-17 & 0xFFFFFFFF)
-    assert emulator.regs[REG_ID["t2"]] == 0xFFFFFFFF
+        assert emulator.regs[REG_ID["t1"]] == (-17 & 0xFFFFFFFF)
+        assert emulator.regs[REG_ID["t2"]] == 0xFFFFFFFF
