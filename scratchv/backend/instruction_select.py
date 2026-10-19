@@ -16,6 +16,7 @@ from scratchv.backend.machine_types import (
     MachineInstr,
     MachineOp,
     MachineOperand,
+    ZERO_REG,
 )
 
 
@@ -417,15 +418,21 @@ class InstructionSelector:
             "exit": exit_label,
         })
 
-        # Materialize the bound before the header so the comparison consumes
-        # two GPRs and the bound is available on every loop iteration.
-        end_val = self._materialize_int_operand(
-            MachineOperand.immediate(int(end)), prefix="loop_end"
-        )
+        # Recreate the constant in the header, just before its only use. A
+        # definition outside the header stays live across the backedge and
+        # forces local allocators to spill/reload an otherwise cheap literal.
         self._emit_label(header_label)
-
-        # Check condition: if iv >= end, exit
-        self._emit(MachineOp.BGE, iv, end_val, target=exit_label)
+        if end != 0 and -2048 <= end <= 2047:
+            # SLTI consumes the bound directly. Avoid executing a separate
+            # constant-loading ADDI on every trip through the header.
+            condition = self._fresh_vreg("loop_condition")
+            self._emit(MachineOp.SLTI, condition, iv, MachineOperand.immediate(end))
+            self._emit(MachineOp.BEQ, condition, MachineOperand.reg(ZERO_REG), target=exit_label)
+        else:
+            end_val = self._materialize_int_operand(
+                MachineOperand.immediate(int(end)), prefix="loop_end"
+            )
+            self._emit(MachineOp.BGE, iv, end_val, target=exit_label)
         self._emit_label(body_label)
 
     def _select_endfor(self, instr: Instruction) -> None:

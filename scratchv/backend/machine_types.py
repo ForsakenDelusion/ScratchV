@@ -37,6 +37,7 @@ class MachineOp(enum.Enum):
     XOR = "xor"
     AND = "and"
     SLT = "slt"
+    SLTI = "slti"
     REM = "rem"
     # Memory
     LW = "lw"

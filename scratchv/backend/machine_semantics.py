@@ -111,6 +111,10 @@ OP_SEM: dict[MachineOp, MachineOpSemantics] = {
     MachineOp.XOR: _DEF_USE_USE,
     MachineOp.AND: _DEF_USE_USE,
     MachineOp.SLT: _DEF_USE_USE,
+    MachineOp.SLTI: MachineOpSemantics(
+        defs=(0,), uses=(1,), immediate_positions=(2,), n_phys=2,
+        operand_classes=(_GPR, _GPR, None),
+    ),
     MachineOp.REM: _DEF_USE_USE,
     MachineOp.LW: _DEF_USE,
     MachineOp.SW: _STORE,

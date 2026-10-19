@@ -79,6 +79,7 @@ class ONNXParser:
         self._value_shapes = {
             value.name: self._shape(value)
             for value in [*model.graph.input, *model.graph.value_info, *model.graph.output]
+            if self._scalar_initializers or self._has_concrete_shape(value.type.tensor_type)
         }
         typed_bits = {}
         if any(init.data_type in (onnx.TensorProto.FLOAT, onnx.TensorProto.DOUBLE)
@@ -115,7 +116,8 @@ class ONNXParser:
         names.update(name for node in graph.node for name in [*node.input, *node.output])
         self.builder.reserve_names(name for name in names if name)
         for value in [*graph.input, *graph.value_info, *graph.output]:
-            self._value_shapes.setdefault(value.name, self._shape(value))
+            if self._scalar_initializers or self._has_concrete_shape(value.type.tensor_type):
+                self._value_shapes.setdefault(value.name, self._shape(value))
 
         # Create IR function from ONNX graph
         func_name = graph.name or "main"
@@ -224,6 +226,17 @@ class ONNXParser:
             raise ONNXParseError(f"Cannot map external tensor {tensor.name}: {exc}") from exc
 
     @staticmethod
+    def _has_concrete_shape(tensor_type) -> bool:
+        """Only concrete ONNX dimensions are exact tensor execution sizes.
+
+        Unknown dimensions use zero sentinels only at the scalar backend's
+        rejection boundary. They must not become zero-sized tensor contracts.
+        """
+        return tensor_type.HasField("shape") and all(
+            dimension.HasField("dim_value") for dimension in tensor_type.shape.dim
+        )
+
+    @staticmethod
     def _shape(value_info) -> tuple[int, ...]:
         """Keep declared shapes, including unknown dimensions/rank, in IR."""
         tensor_type = value_info.type.tensor_type
@@ -255,7 +268,7 @@ class ONNXParser:
                 value = self._value_map[name]
                 if info.elem_type:
                     value.dtype = self._dtype(info.elem_type)
-                if all(dim.HasField("dim_value") for dim in info.shape.dim):
+                if self._has_concrete_shape(info):
                     value.shape = tuple(dim.dim_value for dim in info.shape.dim)
 
     def _get_value(self, name: str) -> Value:

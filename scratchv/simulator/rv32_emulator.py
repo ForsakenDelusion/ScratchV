@@ -336,6 +336,8 @@ class RV32Emulator:
 
             if f3 == 0b000:  # ADDI
                 self.regs[d["rd"]] = (rs1_v + d["imm"]) & 0xFFFFFFFF
+            elif f3 == 0b010:  # SLTI
+                self.regs[d["rd"]] = int(_sext(rs1_v, 32) < d["imm"])
             elif f3 == 0b111:  # ANDI
                 self.regs[d["rd"]] = rs1_v & d["imm"]
             elif f3 == 0b110:  # ORI

@@ -222,7 +222,7 @@ class RegisterAllocator:
         # Keep analysis imports local: analysis adapters depend on backend
         # machine types, while backend.__init__ re-exports this allocator.
         from scratchv.analysis.adapters import MachineCFGAdapter
-        from scratchv.analysis.cfg import build_cfg
+        from scratchv.analysis.cfg import EdgeType, build_cfg
         from scratchv.analysis.liveness import analyze_liveness
         from scratchv.analysis.usedef import MachineUseDefProvider
 
@@ -289,10 +289,31 @@ class RegisterAllocator:
             if index > 0 and instr.op == MachineOp.LABEL
         }
 
+        # Retain register identities only on an immediate fallthrough edge
+        # whose successor has no other predecessor. Taken edges still use
+        # canonical stack copies, and joins/backedges still clear mappings.
+        node_for_instruction = {
+            id(instr): name for name, node in self.cfg.nodes.items()
+            for instr in node.instructions
+        }
+        incoming = {name: [] for name in self.cfg.nodes}
+        for edge in self.cfg.edges:
+            incoming[edge.target].append(edge)
+        carry_after = set()
+        for index, instruction in enumerate(self.instructions[:-1]):
+            following = self.instructions[index + 1]
+            if (following.op is not MachineOp.LABEL
+                    or following.label_role == "function"):
+                continue
+            edges = incoming.get(following.target, [])
+            if (len(edges) == 1 and edges[0].edge_type is EdgeType.FALLTHROUGH
+                    and edges[0].source == node_for_instruction.get(id(instruction))):
+                carry_after.add(index)
+
         saw_executable_instruction = False
         for index, instr in enumerate(self.instructions):
             if instr.op == MachineOp.LABEL:
-                if saw_executable_instruction:
+                if saw_executable_instruction and index - 1 not in carry_after:
                     self._vreg_map.clear()
                     self._reg_pool = {r: None for r in self._all_regs}
                 self._emit(instr)
@@ -391,7 +412,7 @@ class RegisterAllocator:
                         "greedy regalloc does not support a control-flow "
                         "terminator defining a virtual register"
                     )
-                self._flush_regs(live_after)
+                self._flush_regs(live_after, preserve_mappings=index in carry_after)
             self._emit(allocated)
 
             # A value written by this instruction is now out of sync with its
@@ -417,7 +438,8 @@ class RegisterAllocator:
             # A label may be reached either by fallthrough or by another CFG
             # edge.  Canonicalize the fallthrough predecessor before the label
             # so every incoming edge observes initialized spill slots.
-            if index in fallthrough_boundaries and not semantics.is_terminator:
+            if (index in fallthrough_boundaries and not semantics.is_terminator
+                    and index not in carry_after):
                 self._flush_regs(live_after)
 
         self._current_live_after = frozenset()
@@ -512,8 +534,9 @@ class RegisterAllocator:
             self._emit_reload(vreg_name, lru_reg)
         return lru_reg
 
-    def _flush_regs(self, live_values: frozenset[str]) -> None:
-        """Spill all registers at basic block boundaries."""
+    def _flush_regs(self, live_values: frozenset[str], *,
+                    preserve_mappings: bool = False) -> None:
+        """Canonicalize live values, retaining proven fallthrough mappings."""
         for phys_reg, vreg_name in list(self._reg_pool.items()):
             if vreg_name is not None:
                 if (
@@ -521,8 +544,10 @@ class RegisterAllocator:
                     and vreg_name not in self._clean_slots
                 ):
                     self._emit_spill(vreg_name, phys_reg)
-                self._reg_pool[phys_reg] = None
-        self._vreg_map.clear()
+                if not preserve_mappings:
+                    self._reg_pool[phys_reg] = None
+        if not preserve_mappings:
+            self._vreg_map.clear()
 
     def _flush_clobbered(
         self,

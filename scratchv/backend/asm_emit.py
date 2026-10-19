@@ -29,6 +29,7 @@ _OP_NAMES = {
     MachineOp.XOR: "xor",
     MachineOp.AND: "and",
     MachineOp.SLT: "slt",
+    MachineOp.SLTI: "slti",
     MachineOp.REM: "rem",
     MachineOp.LW: "lw",
     MachineOp.SW: "sw",
