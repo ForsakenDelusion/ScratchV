@@ -16,7 +16,7 @@ def _fold_binary(op: str, lhs: int, rhs: int):
     result = getattr(builder, op)(left, right)
     builder.ret(result)
 
-    changes = ConstantFolder().optimize(builder.program)
+    changes = ConstantFolder(rv32_integer_semantics=True).optimize(builder.program)
     instruction = builder.program.functions[0].blocks[0].instructions[2]
     return changes, instruction
 
@@ -29,7 +29,7 @@ def _fold_unary(op: str, value: int):
     result = getattr(builder, op)(source)
     builder.ret(result)
 
-    changes = ConstantFolder().optimize(builder.program)
+    changes = ConstantFolder(rv32_integer_semantics=True).optimize(builder.program)
     instruction = builder.program.functions[0].blocks[0].instructions[1]
     return changes, instruction
 

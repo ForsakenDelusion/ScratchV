@@ -55,22 +55,27 @@ class OpcodeSpec:
 
 
 # T: identical numeric types; F: identical floating point types;
-# N: identical MIN/MAX/ABS types (i32/f32/f64);
+# N: identical MIN/MAX types (i32/f32/f64);
 # I32: all operands and the result are i32.
 OPCODE_SPECS = {}
 for _ops, _count, _family in (
     ((OpCode.ADD, OpCode.SUB, OpCode.MUL, OpCode.DIV, OpCode.MATMUL, OpCode.DOT), 2, "T"),
-    ((OpCode.NEG, OpCode.RELU, OpCode.MAXPOOL, OpCode.RESHAPE, OpCode.TRANSPOSE), 1, "T"),
-    ((OpCode.EXP, OpCode.GELU, OpCode.SIGMOID, OpCode.SOFTMAX, OpCode.SQRT), 1, "F"),
+    ((OpCode.NEG, OpCode.ABS, OpCode.RELU, OpCode.MAXPOOL, OpCode.RESHAPE, OpCode.TRANSPOSE,
+      OpCode.SLICE, OpCode.UNSQUEEZE, OpCode.EXPAND), 1, "T"),
+    ((OpCode.EXP, OpCode.GELU, OpCode.SIGMOID, OpCode.SOFTMAX,
+      OpCode.SQRT, OpCode.REDUCE_MEAN, OpCode.COS, OpCode.SIN,
+      OpCode.RECIPROCAL), 1, "F"),
     ((OpCode.CONV, OpCode.GEMM), 3, "T"),
     ((OpCode.MIN, OpCode.MAX), 2, "N"),
-    ((OpCode.ABS,), 1, "N"),
 ):
     for _op in _ops:
         OPCODE_SPECS[_op] = OpcodeSpec(_count, _count, True, _family)
 OPCODE_SPECS[OpCode.REM] = OpcodeSpec(2, 2, True, "I32")
 OPCODE_SPECS.update({
     OpCode.CONCAT: OpcodeSpec(1, None, True, "T"),
+    OpCode.GATHER: OpcodeSpec(2, 2, True),
+    OpCode.CAST: OpcodeSpec(1, 1, True),
+    OpCode.POW: OpcodeSpec(2, 2, True),
     OpCode.LOAD_CONST: OpcodeSpec(0, 0, True),
     OpCode.ALLOCA: OpcodeSpec(0, 0, True),
     OpCode.LOAD: OpcodeSpec(1, 1, True),
@@ -87,7 +92,7 @@ _RULES = {name: i for i, name in enumerate((
 ))}
 _FLOATS = (DataType.FLOAT32, DataType.FLOAT64)
 _INTS = (DataType.INT32, DataType.INT64)
-_MIN_MAX_ABS_TYPES = frozenset({
+_MIN_MAX_TYPES = frozenset({
     DataType.INT32,
     DataType.FLOAT32,
     DataType.FLOAT64,
@@ -379,7 +384,7 @@ class IRVerifier:
             types = [v.dtype for v in values]
             if (len(set(types)) != 1
                     or (spec.family == "F" and types[0] not in _FLOATS)
-                    or (spec.family == "N" and types[0] not in _MIN_MAX_ABS_TYPES)
+                    or (spec.family == "N" and types[0] not in _MIN_MAX_TYPES)
                     or (spec.family == "I32" and types[0] != DataType.INT32)):
                 error("signature-types", "incompatible types: " + ", ".join(t.value for t in types))
         if inst.opcode == OpCode.LOAD_CONST and inst.dest is not None and isinstance(inst.dest.dtype, DataType):
@@ -406,6 +411,15 @@ class IRVerifier:
                 error("loop-step-direction", "FOR step must be positive")
         if not valid_count:
             return
+        if inst.opcode == OpCode.POW:
+            if inst.dest is not None and inst.dest.dtype != inst.operands[0].dtype:
+                error("pow-result", "POW result dtype must match base dtype")
+        if inst.opcode == OpCode.GATHER:
+            data, indices = inst.operands
+            if indices.dtype not in _INTS:
+                error("gather-indices", "GATHER indices must be i32 or i64")
+            if inst.dest is not None and inst.dest.dtype != data.dtype:
+                error("gather-result", "GATHER result dtype must match data dtype")
         if inst.opcode == OpCode.BR_IF:
             if count == 1:
                 if isinstance(inst.operands[0].dtype, DataType) and inst.operands[0].dtype not in _INTS:

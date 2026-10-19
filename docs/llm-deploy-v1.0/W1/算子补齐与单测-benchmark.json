@@ -1,0 +1,14 @@
+{
+  "document_kind": "historical_benchmark_index",
+  "schema_version": 1,
+  "measurement_available": false,
+  "reproduction_target": "Ubuntu 24.04 x86_64 / Bash / Python 3.12",
+  "guide": "算子补齐与单测-benchmark.md",
+  "original_commit": "2d07ccc42936dcfde19d552bca02a324cd33821c",
+  "historical_reports": {
+    "md": "https://github.com/ScratchV-Compiler/ScratchV/blob/2d07ccc42936dcfde19d552bca02a324cd33821c/docs/llm-deploy-v1.0/W1/算子补齐与单测-benchmark.md",
+    "json": "https://github.com/ScratchV-Compiler/ScratchV/blob/2d07ccc42936dcfde19d552bca02a324cd33821c/docs/llm-deploy-v1.0/W1/算子补齐与单测-benchmark.json",
+    "html": "https://github.com/ScratchV-Compiler/ScratchV/blob/2d07ccc42936dcfde19d552bca02a324cd33821c/docs/llm-deploy-v1.0/W1/算子补齐与单测-benchmark.html"
+  },
+  "note": "Index only; not a benchmark measurement or a Linux execution result. Generate a new report with benchmarks.bench_onnx_operators."
+}

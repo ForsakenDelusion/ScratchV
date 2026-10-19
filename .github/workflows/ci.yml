@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# Only newer PR revisions cancel older PR runs. Pushes retain their own run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -13,18 +18,50 @@ permissions:
   contents: read
 
 jobs:
+  scope:
+    name: Select validation scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      llm: ${{ steps.scope.outputs.llm }}
+      w4: ${{ steps.scope.outputs.w4 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Preserve deployment and documentation path scopes
+        id: scope
+        run: python3 scripts/ci_scope.py
+
+  llm:
+    name: Deployment acceptance
+    needs: scope
+    if: github.event_name == 'pull_request' && needs.scope.outputs.llm == 'true'
+    uses: ./.github/workflows/llm-deploy.yml
+
+  topic06:
+    name: Topic 06 benchmark
+    uses: ./.github/workflows/topic06-benchmark.yml
+
   # ═════════════════════════════════════════════════════════════════════════
   # 课题功能测试：所有14个模块的单元测试 + 集成测试
   # ═════════════════════════════════════════════════════════════════════════
   test:
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || 'self-hosted' }}
     timeout-minutes: 20
+    env:
+      # Pin the scheduler's timing authority so both runners agree; see the
+      # toolchain step below.
+      LLVM_MCA: llvm-mca-18
     steps:
       - name: Checkout pull request on isolated runner
         if: github.event_name == 'pull_request'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          # ONNX before/after integration tests read the pinned PR #89 commit.
+          fetch-depth: 0
 
       - name: Set up Python for pull request
         if: github.event_name == 'pull_request'
@@ -86,10 +123,24 @@ jobs:
           echo "Using python: $($PY -c 'import sys; print(sys.executable, sys.version)')"
           $PY -m pip install --upgrade pip setuptools wheel
           $PY -m pip install -e ".[all]"
-          $PY -m pip install "pytest>=7,<10"
+          $PY -m pip install "pytest>=7,<10" "PyYAML==6.0.3"
+
+      - name: Install pinned CPU dependencies for Qwen and W3 tests
+        run: |
+          set -euo pipefail
+          # The full test suite collects W3 subgraph and workflow tests.
+          # Install their actual dependencies instead of skipping those tests.
+          $PY -m pip install "torch==2.7.1" --index-url https://download.pytorch.org/whl/cpu
+          $PY -m pip install -r requirements/qwen3-small-probe.txt "PyYAML==6.0.3"
+          $PY -m pip check
+          $PY -c "import torch, yaml, safetensors; assert torch.__version__ == '2.7.1+cpu' and torch.version.cuda is None, torch.__version__"
+
+      # Unconditional: a docs-only change never selects the deployment scope, so
+      # this check cannot live behind a path filter.
+      - name: Check public instructions and Bash syntax
+        run: $PY scripts/check_linux_repro_docs.py --check-bash
 
       - name: Run Topic 04 PassManager regressions
-        id: topic04_pass_manager
         env:
           PYTHONHASHSEED: "0"
         run: |
@@ -104,40 +155,56 @@ jobs:
             --junit-xml=benchmark_reports/topic04_pass_manager.xml \
             | tee benchmark_reports/topic04_pass_manager.txt
 
-      - name: Summarize Topic 04 PassManager results
-        if: always()
+      - name: Run IR interpreter and LICM regressions
+        timeout-minutes: 5
         env:
-          TOPIC04_OUTCOME: ${{ steps.topic04_pass_manager.outcome }}
+          PYTHONHASHSEED: "0"
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
         run: |
-          {
-            echo "## Topic 04 PassManager"
-            echo "Result: $TOPIC04_OUTCOME"
-            echo ""
-            echo "Coverage: pass registration, enable/disable switches, constant folding, functional pipelines, and optimizer regressions."
-            echo ""
-            echo "JUnit XML and detailed test output are included in the test-reports artifact when tests run."
-          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p benchmark_reports
+          $PY -m pytest tests/test_ir_interpreter*.py tests/test_licm_safety.py -q \
+            --junit-xml=benchmark_reports/ir_interpreter_tests.xml
 
       - name: Prepare RISC-V test tools
         run: |
           set -euo pipefail
-          if ! command -v clang >/dev/null || ! command -v ld.lld >/dev/null || ! command -v qemu-riscv32 >/dev/null || ! command -v llvm-mca >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install --no-install-recommends -y clang lld qemu-user llvm
+          # llvm-mca is the scheduler's timing authority. The checked-in benchmark
+          # numbers and the scheduler test expectations are calibrated to LLVM 18.
+          # Ubuntu's `llvm` metapackage resolves to 14 on 22.04 and 18 on 24.04, so
+          # pin the major version instead of taking whatever `llvm` happens to be.
+          if ! command -v clang >/dev/null || ! command -v ld.lld >/dev/null \
+             || ! command -v qemu-riscv32 >/dev/null || ! command -v llvm-mca-18 >/dev/null; then
+            # The self-hosted runner has no passwordless sudo; there the toolchain is
+            # provisioned out of band and the checks below are the assertion.
+            if sudo -n true 2>/dev/null; then
+              sudo apt-get update
+              sudo apt-get install --no-install-recommends -y clang lld qemu-user llvm-18 \
+                || echo "::warning::llvm-18 is not available from this runner's repositories"
+            else
+              echo "::warning::no passwordless sudo; using the runner's preinstalled toolchain"
+            fi
           fi
-          command -v clang
-          command -v ld.lld
-          command -v qemu-riscv32
-          clang --version
-          ld.lld --version
-          qemu-riscv32 --version
-          $PY -c 'from scratchv.backend.llvm_mca import check_version; print(check_version("llvm-mca"))'
+          missing=""
+          for tool in clang ld.lld qemu-riscv32 llvm-mca-18; do
+            command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing tools:$missing -- provision them on this runner as root; CI cannot install them (no passwordless sudo)"
+            echo "::notice::Ubuntu 22.04's default \`llvm\` package is 14, so \`llvm-mca-18\` needs the apt.llvm.org archive; the scheduler's expectations are calibrated to LLVM 18 (docs/topics/18-指令调度器/README.md)."
+            exit 1
+          fi
+          $PY -c "from scratchv.backend.llvm_mca import check_version; v = check_version('llvm-mca-18'); print(v); assert 'LLVM version 18.' in v, 'scheduler timing requires LLVM 18, got: ' + v"
 
       # Includes scheduling and standalone CNN execution regressions.
       - name: Run all topic tests
         env:
           PYTHONHASHSEED: "0"
           SCRATCHV_REQUIRE_RISCV_EXECUTION: "1"
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
         run: |
           mkdir -p benchmark_reports
           $PY -m pytest tests/ -v --tb=short \
@@ -209,11 +276,12 @@ jobs:
         run: |
           mkdir -p benchmark_reports/ir_verifier_smoke
           for level in none basic all; do
+            # Verify tensor IR without invoking the scalar-only legacy backend.
             $PY -m scratchv models/graph/cnn.onnx \
-              --verify-ir --optimize "$level" --dump-ir \
-              -o "benchmark_reports/ir_verifier_smoke/cnn_${level}.s" \
+              --backend ir --verify-ir --optimize "$level" --dump-ir \
+              -o "benchmark_reports/ir_verifier_smoke/cnn_${level}.ir" \
               2>&1 | tee "benchmark_reports/ir_verifier_smoke/cnn_${level}.log"
-            test -s "benchmark_reports/ir_verifier_smoke/cnn_${level}.s"
+            test -s "benchmark_reports/ir_verifier_smoke/cnn_${level}.ir"
           done
         shell: bash
 
@@ -231,6 +299,7 @@ jobs:
           name: test-reports
           path: |
             benchmark_reports/test_results.xml
+            benchmark_reports/ir_interpreter_tests.xml
             benchmark_reports/tests.html
             benchmark_reports/ir_verifier_smoke/
             benchmark_reports/topic04_pass_manager.xml
@@ -243,6 +312,10 @@ jobs:
   benchmark:
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || 'self-hosted' }}
     timeout-minutes: 30
+    env:
+      # Pin the scheduler's timing authority so both runners agree; see the
+      # toolchain step below.
+      LLVM_MCA: llvm-mca-18
     steps:
       - name: Checkout pull request on isolated runner
         if: github.event_name == 'pull_request'
@@ -313,17 +386,47 @@ jobs:
           $PY -m pip install markdown "pytest>=7,<10"
 
       # Topic 18 reports share the existing benchmark job and report artifact.
+      - name: IR interpreter execution benchmark
+        timeout-minutes: 5
+        env:
+          PYTHONHASHSEED: "0"
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+        run: |
+          $PY -m benchmarks.bench_ir_interpreter --warmup 1 --repeats 3 \
+            --json-output benchmark_reports/ir_interpreter.json \
+            --markdown benchmark_reports/ir_interpreter.md
+
       - name: Prepare RISC-V scheduling execution tools
         run: |
           set -euo pipefail
-          if ! command -v clang >/dev/null || ! command -v ld.lld >/dev/null || ! command -v qemu-riscv32 >/dev/null || ! command -v llvm-mca >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install --no-install-recommends -y clang lld qemu-user llvm
+          # llvm-mca is the scheduler's timing authority. The checked-in benchmark
+          # numbers and the scheduler test expectations are calibrated to LLVM 18.
+          # Ubuntu's `llvm` metapackage resolves to 14 on 22.04 and 18 on 24.04, so
+          # pin the major version instead of taking whatever `llvm` happens to be.
+          if ! command -v clang >/dev/null || ! command -v ld.lld >/dev/null \
+             || ! command -v qemu-riscv32 >/dev/null || ! command -v llvm-mca-18 >/dev/null; then
+            # The self-hosted runner has no passwordless sudo; there the toolchain is
+            # provisioned out of band and the checks below are the assertion.
+            if sudo -n true 2>/dev/null; then
+              sudo apt-get update
+              sudo apt-get install --no-install-recommends -y clang lld qemu-user llvm-18 \
+                || echo "::warning::llvm-18 is not available from this runner's repositories"
+            else
+              echo "::warning::no passwordless sudo; using the runner's preinstalled toolchain"
+            fi
           fi
-          command -v clang
-          command -v ld.lld
-          command -v qemu-riscv32
-          $PY -c 'from scratchv.backend.llvm_mca import check_version; print(check_version("llvm-mca"))'
+          missing=""
+          for tool in clang ld.lld qemu-riscv32 llvm-mca-18; do
+            command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing tools:$missing -- provision them on this runner as root; CI cannot install them (no passwordless sudo)"
+            echo "::notice::Ubuntu 22.04's default \`llvm\` package is 14, so \`llvm-mca-18\` needs the apt.llvm.org archive; the scheduler's expectations are calibrated to LLVM 18 (docs/topics/18-指令调度器/README.md)."
+            exit 1
+          fi
+          $PY -c "from scratchv.backend.llvm_mca import check_version; v = check_version('llvm-mca-18'); print(v); assert 'LLVM version 18.' in v, 'scheduler timing requires LLVM 18, got: ' + v"
 
       - name: Topic 9 DSL diagnostics benchmark
         env:
@@ -339,6 +442,7 @@ jobs:
           trap 'git worktree remove --force "$BASELINE"' EXIT
           python3.12 -m benchmarks.bench_dsl_diagnostics \
             --baseline-root "$BASELINE" \
+            --allow-input-registration \
             --allow-ir-change 016_if_simple.dsl \
             --allow-ir-change 017_while_sum.dsl \
             --allow-ir-change 018_nested_if.dsl \
@@ -419,7 +523,7 @@ jobs:
           $PY -m benchmarks.bench_cnn_schedule \
             --model models/graph/cnn.onnx \
             --standalone-asm benchmark_reports/cnn_scratchv.s \
-            --llvm-mca llvm-mca \
+            --llvm-mca llvm-mca-18 \
             --json benchmark_reports/inst_scheduler_cnn.json \
             --markdown benchmark_reports/inst_scheduler_cnn.md
 
@@ -570,6 +674,13 @@ jobs:
       - name: Write job summary
         if: always()
         run: |
+          echo "## Compiler benchmarks" >> "$GITHUB_STEP_SUMMARY"
+          echo "Detailed measurements and diagnostics are retained below and in the benchmark artifact." >> "$GITHUB_STEP_SUMMARY"
+          echo "<details><summary>Compiler benchmark details</summary>" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f benchmark_reports/ir_interpreter.md ]; then
+            cat benchmark_reports/ir_interpreter.md >> "$GITHUB_STEP_SUMMARY"
+          fi
           if [ -f benchmark_reports/topic01_control_flow.md ]; then
             cat benchmark_reports/topic01_control_flow.md >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -619,6 +730,7 @@ jobs:
           if [ -f benchmark_reports/ir_verifier.md ]; then
             cat benchmark_reports/ir_verifier.md >> "$GITHUB_STEP_SUMMARY"
           fi
+          echo "</details>" >> "$GITHUB_STEP_SUMMARY"
 
   # ═════════════════════════════════════════════════════════════════════════
   # GitHub Pages 部署 (仅 main 分支)
@@ -637,3 +749,18 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+
+  acceptance:
+    name: CI acceptance
+    if: always()
+    needs: [scope, test, benchmark, topic06, llm]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Summarize and require every selected check
+        env:
+          CI_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: python3 scripts/summarize_ci.py >> "$GITHUB_STEP_SUMMARY"

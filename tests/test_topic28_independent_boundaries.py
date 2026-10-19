@@ -82,7 +82,7 @@ class TestTypedInputBoundaries:
         )
         assert not result.success
         assert any(
-            "scalar" in error and "shape" in error for error in result.errors
+            "ONNX shape inference failed" in error for error in result.errors
         ), result.errors
 
     @pytest.mark.parametrize("width", [32, 64])
@@ -124,19 +124,18 @@ class TestTypedInputBoundaries:
         onnx.checker.check_model(model)
         path = tmp_path / "alias.onnx"
         onnx.save(model, path)
-        program = ONNXParser().parse(str(path))
-        original = (
-            program.functions[0].params[0] if inputs else program.global_values[0]
-        )
-        assert (
-            original.shape == source_shape
-        ), "output annotations must not rewrite source storage/ABI shape"
+        # Upstream shape inference now rejects conflicting declarations before
+        # either storage or ABI metadata can be overwritten by an alias.
+        from scratchv.frontend.onnx_parser import ONNXParseError
+
+        with pytest.raises(ONNXParseError, match="ONNX shape inference failed"):
+            ONNXParser().parse(str(path))
         result = CompilerDriver(config("greedy")).compile(
             str(path), str(tmp_path / "out.s")
         )
         assert not result.success
         assert any(
-            "scalar" in error and "shape" in error for error in result.errors
+            "ONNX shape inference failed" in error for error in result.errors
         ), result.errors
 
     @pytest.mark.parametrize("verify", [False, True])

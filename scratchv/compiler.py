@@ -47,7 +47,8 @@ class CompilerConfig:
     """All compiler options in one place.
 
     Attributes:
-        backend:        ``"riscv"`` or ``"llvm"``.
+        backend:        ``"riscv"``, ``"llvm"``, ``"ir"``, or ``"tensor-c"``. The tensor
+                        backend emits static FP32 C kernels for cross-compilation.
         optimize_level: ``"none"``, ``"basic"``, or ``"all"``.
         passes:         Explicit ordered IR pass names; None uses the preset.
         disabled_passes: IR pass names excluded from the selected pipeline.
@@ -100,6 +101,7 @@ class CompilerConfig:
     verify_ir: bool = False
     target_isa: str = "rv32im"
     target_abi: str = "ilp32"
+    max_tensor_workspace_bytes: int = 256 * 1024 * 1024
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -172,6 +174,8 @@ class CompilerDriver:
         self._last_register_map: dict[str, str] = {}
         self._last_allocation_stats: dict[str, int] = {}
         self._assembly_report = OptimizationReport("assembly", (), 0, 0.0)
+        self.initializers: dict[str, Any] = {}
+        self.tensor_artifact = None
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -215,6 +219,25 @@ class CompilerDriver:
         self._last_register_map = {}
         self._last_allocation_stats = {}
         self._assembly_report = OptimizationReport("assembly", (), 0, 0.0)
+        self.initializers = {}
+        self.tensor_artifact = None
+
+        if self.config.backend not in ("riscv", "llvm", "ir", "tensor-c"):
+            return CompileResult(success=False, errors=["Unknown compiler backend"])
+        if self.config.backend in ("ir", "tensor-c") and self.config.verify:
+            return CompileResult(success=False, errors=[
+                "--verify does not execute generated tensor code; use "
+                "probes/w2_qwen3_small/riscv.py for the QEMU numerical gate "
+                "(--verify-ir validates compiler IR)"
+            ])
+        if self.config.backend in ("ir", "tensor-c") and any((
+            self.config.use_dag_isel, self.config.beautify_asm,
+            self.config.peephole_asm, self.config.const_merge,
+            self.config.count_instr, self.config.cycle_stats,
+        )):
+            return CompileResult(success=False, errors=[
+                "Assembly-only options cannot be used with the ir/tensor-c backends"
+            ])
 
         if self.config.schedule and self.config.backend != "riscv":
             return CompileResult(
@@ -239,7 +262,8 @@ class CompilerDriver:
 
         # Resolve output path
         if output_path is None:
-            output_path = "output.ll" if self.config.backend == "llvm" else "output.s"
+            output_path = {"llvm": "output.ll", "tensor-c": "output.c", "ir": "output.ir"}.get(
+                self.config.backend, "output.s")
 
         use_dsl = dsl_source is not None or (input_path and input_path.endswith(".dsl"))
 
@@ -299,7 +323,7 @@ class CompilerDriver:
                 validate_extended_types(program)
             except ValueError as exc:
                 return CompileResult(success=False, errors=[f"Codegen input error: {exc}"])
-        else:
+        elif self.config.backend == "riscv":
             from scratchv.ir.types import OpCode
 
             extended_ops = {
@@ -332,7 +356,7 @@ class CompilerDriver:
                     success=False, errors=[f"Codegen input error: {exc}"],
                 )
 
-        if self.config.verify_ir:
+        if self.config.verify_ir or self.config.backend == "tensor-c":
             self._check_ir(program, "after-parse")
 
         ir_dump_before = ""
@@ -383,7 +407,7 @@ class CompilerDriver:
             )
 
         # --- 4. Code generation ---
-        if self.config.verify_ir:
+        if self.config.verify_ir or self.config.backend == "tensor-c":
             self._check_ir(program, "before-codegen")
         try:
             asm_text = self._generate_code(program)
@@ -477,7 +501,12 @@ class CompilerDriver:
         else:
             from scratchv.frontend.onnx_parser import ONNXParser
 
-            return ONNXParser().parse(input_path)
+            parser = ONNXParser()
+            program = parser.parse(input_path, scalar_initializers=self.config.use_extended_isel)
+            # Tensor values in Program describe shape/type, not their payload.
+            # Keep the parser-owned arrays alive through backend generation.
+            self.initializers = parser.initializers
+            return program
 
     # ── Internal: verify IR ─────────────────────────────────────────────────
 
@@ -517,8 +546,10 @@ class CompilerDriver:
             for pass_ in manager.passes:
                 if isinstance(pass_, (ConstantFolder, DeadCodeEliminator, IRPeepholeOptimizer, MulAddFusion, LICM)):
                     pass_.preserve_float_semantics = True
+                if isinstance(pass_, ConstantFolder):
+                    pass_.rv32_integer_semantics = self.config.use_extended_isel
         manager.data_type = Program
-        if self.config.verify_ir:
+        if self.config.verify_ir or self.config.backend == "tensor-c":
             manager.before_pass = lambda pass_, data: self._check_ir(data, f"before:{pass_.name}")
             manager.after_pass = lambda pass_, data: self._check_ir(data, f"after:{pass_.name}")
         return manager.run_pipeline(program)
@@ -555,6 +586,36 @@ class CompilerDriver:
 
     def _generate_code(self, program) -> str:
         """Run code generation (instruction selection + regalloc + emit)."""
+        if self.config.backend == "ir":
+            from scratchv.ir.printer import IRPrinter
+
+            return IRPrinter(program).dump()
+        if self.config.backend == "tensor-c":
+            from scratchv.backend.tensor_c_codegen import TensorCCodegen
+
+            self.tensor_artifact = TensorCCodegen(
+                program, self.initializers,
+                max_workspace_bytes=self.config.max_tensor_workspace_bytes,
+            ).generate()
+            return self.tensor_artifact.source
+
+        # The legacy selectors operate on scalar registers. Do not silently
+        # turn a tensor MatMul into a scalar MUL (or tensor softmax into a move).
+        values = list(program.global_values)
+        for function in program.functions:
+            values.extend(function.params)
+            for block in function.blocks:
+                for instruction in block.instructions:
+                    values.extend(instruction.operands)
+                    if instruction.dest is not None:
+                        values.append(instruction.dest)
+        # Extended selection validates and lowers singleton shapes as scalars;
+        # the legacy selectors still have no tensor-buffer representation.
+        if not self.config.use_extended_isel and any(value.shape for value in values):
+            raise ValueError(
+                "Legacy riscv/llvm backends cannot lower tensor buffers; "
+                "use --backend tensor-c and the RISC-V tensor runtime"
+            )
         if self.config.backend == "llvm":
             from scratchv.backend.llvm_codegen import LLVMCodegen
 

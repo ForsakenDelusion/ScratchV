@@ -470,7 +470,7 @@ class TestTopic28FourthReviewRegressions:
                 [helper.make_node("Min", ["a"], ["out"])],
                 "main",
                 [],
-                [helper.make_tensor_value_info("out", TensorProto.FLOAT, [1])],
+                [helper.make_tensor_value_info("out", TensorProto.FLOAT, [])],
                 [numpy_helper.from_array(array, name="a")],
             ),
             tmp_path,

@@ -85,8 +85,9 @@ class TestTypedIRFrontend:
             builder.rem(f32, f32)
         with pytest.raises(ValueError, match="min does not support i64"):
             builder.min(i64, i64)
-        with pytest.raises(ValueError, match="abs does not support i64"):
-            builder.abs(i64)
+        # Shared IR also serves the checked tensor interpreter; the extended
+        # RV32 backend rejects i64 at its own type boundary.
+        assert builder.abs(i64).dtype is DataType.INT64
 
     @pytest.mark.parametrize(
         "dtype", [DataType.INT32, DataType.FLOAT32, DataType.FLOAT64]
@@ -168,7 +169,7 @@ class TestTypedIRFrontend:
             (OpCode.REM, 2, (DataType.INT32,)),
             (OpCode.MIN, 2, (DataType.INT32, DataType.FLOAT32, DataType.FLOAT64)),
             (OpCode.MAX, 2, (DataType.INT32, DataType.FLOAT32, DataType.FLOAT64)),
-            (OpCode.ABS, 1, (DataType.INT32, DataType.FLOAT32, DataType.FLOAT64)),
+            (OpCode.ABS, 1, tuple(DataType)),
         ],
     )
     def test_ir_verifier_accepts_extension_signatures(self, opcode, arity, dtypes):
@@ -182,7 +183,7 @@ class TestTypedIRFrontend:
             (OpCode.REM, (DataType.FLOAT32, DataType.FLOAT32), DataType.FLOAT32),
             (OpCode.MIN, (DataType.INT32, DataType.FLOAT32), DataType.INT32),
             (OpCode.MAX, (DataType.INT64, DataType.INT64), DataType.INT64),
-            (OpCode.ABS, (DataType.INT64,), DataType.INT64),
+            (OpCode.ABS, (DataType.INT64,), DataType.INT32),
         ],
     )
     def test_ir_verifier_rejects_unsupported_extension_signatures(

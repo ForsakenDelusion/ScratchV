@@ -1,0 +1,600 @@
+name: LLM Deploy v1.0
+
+# CI for the Qwen3-0.6B-on-RISC-V project (docs/llm-deploy-v1.0/).
+#
+# PR validation is called by ci.yml so compiler and deployment evidence share
+# one Actions run. Separate jobs retain their dependencies and failure identity.
+# Manual and scheduled entry points remain available for explicit full runs.
+#
+# PRs execute small numeric gates and a separate complete frontend audit.
+# Both are mandatory for the W2 acceptance result. Full-model ORT remains
+# manual/nightly; frontend parsing never claims full IR execution.
+#
+#   docs:interfaces  docs:risks
+#   probe:qemu-matmul  probe:small-transformer  probe:qwen3-onnx
+#   numeric:ir-qwen3-small  frontend:parse-qwen3
+#   unit:frontend-ops  unit:backend-ops  unit:runtime  integration:runtime-model
+#
+# Explicit manual runs can also call the delivered W3 workflows from the same
+# commit. The default W1/W2 checks do not imply full-model IR acceptance.
+
+on:
+  workflow_call:
+  schedule:
+    # Nightly, off the hour: 19:23 UTC = 03:23 北京时间.
+    - cron: '23 19 * * *'
+  workflow_dispatch:
+    inputs:
+      run_w3_validation:
+        description: Also run complete W3 preparation and seven-case IR validation
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # Delivered numeric gates are mandatory: missing scripts/tools are failures.
+  PROBE_MATMUL: probes/w1_matmul_4x4/run.py
+  PROBE_TRANSFORMER: probes/w1_tiny_transformer/run.py
+  PROBE_QWEN3_EXPORT: probes/w1_qwen3_export/run.py
+  PROBE_QWEN3_SMALL: probes/w2_qwen3_small/run.py
+  PROBE_QWEN3_PARSE: probes/w2_qwen3_parse/run.py
+  QWEN3_PY: output/qwen3-probe-venv/bin/python
+
+jobs:
+  w3-validation:
+    name: "W3 / explicit full validation"
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_w3_validation }}
+    uses: ./.github/workflows/w3-nightly.yml
+
+  llm-deploy:
+    name: "LLM Deploy v1.0 / W1 + W2"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Cache runtime LFS objects
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: runtime-lfs-${{ runner.os }}-${{ hashFiles('assets/qwen3-0.6b/tokenizer/*', 'probes/w1_tiny_transformer/out/tiny_transformer_2l.onnx') }}
+      - name: Fetch runtime LFS assets
+        run: |
+          git lfs install --local
+          git lfs pull --include="assets/qwen3-0.6b/tokenizer/*,probes/w1_tiny_transformer/out/tiny_transformer_2l.onnx" --exclude=""
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      # ── 前置：RISC-V 工具链 + Python 依赖 ──────────────────────────────
+      - name: Install RISC-V toolchain and QEMU
+        run: |
+          set -euo pipefail
+          if ! command -v clang >/dev/null || ! command -v ld.lld >/dev/null || ! command -v qemu-riscv32 >/dev/null || ! command -v qemu-system-riscv64 >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --no-install-recommends -y clang lld qemu-user qemu-system-misc
+          fi
+          missing=""
+          for tool in clang ld.lld qemu-riscv32 qemu-system-riscv64; do
+            command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing tools:$missing"
+            exit 1
+          fi
+          clang --version | head -1
+          qemu-riscv32 --version | head -1
+          qemu-system-riscv64 --version | head -1
+
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -v -e ".[all,llm-deploy]"
+
+      # ── docs:interfaces / docs:risks ──────────────────────────────────
+      - name: "docs:interfaces + docs:risks"
+        id: docs
+        run: python3 scripts/check_llm_deploy_docs.py --week W1
+
+      - name: "docs:linux-reproduction"
+        run: python3 scripts/check_linux_repro_docs.py --check-bash
+
+      # ── probe:qemu-matmul ─────────────────────────────────────────────
+      - name: "probe:qemu-matmul"
+        id: matmul
+        run: |
+          set -euo pipefail
+          python3 "$PROBE_MATMUL"
+
+      - name: Tensor compiler and runtime regressions
+        run: |
+          python3 -m pytest \
+            tests/test_tensor_c_codegen.py tests/test_tensor_compiler.py \
+            tests/test_riscv_tensor_runtime.py tests/test_optimizer_numeric_semantics.py \
+            tests/test_qwen_artifact_selection.py tests/test_w1_qwen3_export.py tests/test_qwen3_small_riscv_gate.py \
+            tests/test_w1_repro_env.py tests/test_qwen3_full_structure.py \
+            tests/test_qwen3_full_audit.py tests/test_qwen3_full_parse.py \
+            tests/test_llm_inputs.py tests/test_w2_backend_ops_gate.py \
+            tests/test_w2_runtime_gate.py tests/test_w2_runtime_metadata.py \
+            tests/test_w2_runtime_reporting.py tests/test_w2_acceptance.py tests/test_w2_ci_results.py \
+            tests/test_numeric_metrics.py tests/test_numeric_summary.py tests/test_w2_actions_summary.py -q
+
+      - name: Repeated Linux timeout cleanup regression
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          mkdir -p output/process-cleanup-repeats
+          for attempt in $(seq 1 20); do
+            python3 -B -m pytest \
+              tests/test_riscv_tensor_runtime.py::test_timeout_terminates_only_owned_process_tree \
+              -q -p no:cacheprovider \
+              --basetemp "output/process-cleanup-repeats/temp-$attempt" \
+              --junit-xml="output/process-cleanup-repeats/attempt-$attempt.xml"
+          done
+
+      - name: "unit:frontend-ops"
+        id: frontend_ops
+        run: |
+          python3 -m pytest tests/test_qwen3_frontend_patterns.py -q \
+            --junit-xml=output/w2-frontend-ops.xml
+
+      - name: "unit:backend-ops"
+        id: backend_ops
+        timeout-minutes: 15
+        run: |
+          python3 probes/w2_backend_ops/run.py --output-dir output/w2-backend-ops
+
+      # ── probe:small-transformer ───────────────────────────────────────
+      - name: "probe:small-transformer"
+        id: transformer
+        run: |
+          set -euo pipefail
+          python3 "$PROBE_TRANSFORMER" --model probes/w1_tiny_transformer/out/tiny_transformer_2l.onnx
+
+      # The real architecture probe uses random weights, needs no checkpoint
+      # download, and runs on PRs. Keep its export stack isolated from W1 and
+      # the generic compiler tests. The extra selects the pinned CPU wheel.
+      - name: Install pinned CPU Qwen3 probe environment
+        run: |
+          set -euo pipefail
+          python3 -m venv output/qwen3-probe-venv
+          "$QWEN3_PY" -m pip install --upgrade pip
+          "$QWEN3_PY" -m pip install -v -e ".[llm-deploy]"
+          "$QWEN3_PY" -m pip check
+          "$QWEN3_PY" -c "import torch; assert torch.__version__ == '2.7.1+cpu' and torch.version.cuda is None, torch.__version__"
+
+      - name: W1 reproduction environment preflight
+        run: |
+          set -euo pipefail
+          "$QWEN3_PY" -X utf8 scripts/check_w1_repro_env.py \
+            --require-clean --output-dir output/w1-repro-env
+
+      - name: Runtime unit regressions in pinned environment
+        run: |
+          "$QWEN3_PY" -m pytest \
+            tests/test_llm_inputs.py tests/test_qwen3_tokenizer.py \
+            tests/test_w2_runtime_gate.py tests/test_w2_runtime_metadata.py \
+            tests/test_w2_runtime_reporting.py tests/test_w2_runtime_model.py \
+            -q --junit-xml=output/w2-runtime-tests.xml
+
+      - name: "unit:runtime"
+        id: runtime
+        timeout-minutes: 10
+        run: |
+          "$QWEN3_PY" probes/w2_runtime/run.py \
+            --tokenizer-dir assets/qwen3-0.6b/tokenizer --output-dir output/w2-runtime
+
+      - name: "integration:runtime-model"
+        id: runtime_model
+        timeout-minutes: 15
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: |
+          "$QWEN3_PY" probes/w2_runtime_model/run.py \
+            --tokenizer-dir assets/qwen3-0.6b/tokenizer --output-dir output/w2-runtime-model
+
+      - name: "numeric:ir-qwen3-small"
+        id: qwen3_small
+        timeout-minutes: 15
+        env:
+          PYTHONHASHSEED: "0"
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: |
+          set -euo pipefail
+          "$QWEN3_PY" "$PROBE_QWEN3_SMALL" --output-dir output/qwen3-small
+
+      - name: Explicit Qwen3 artifact optimization integration
+        id: qwen3_artifact_tests
+        env:
+          SCRATCHV_QWEN_ARTIFACT_DIR: output/qwen3-small
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+        run: |
+          set -euo pipefail
+          "$QWEN3_PY" -B -m pytest \
+            tests/test_optimizer_numeric_semantics.py::test_real_qwen_artifact_optimization_matches_ort \
+            -q -rs -o junit_family=xunit1 --junit-xml=output/qwen3-small/optimization-tests.xml
+          "$QWEN3_PY" - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = ET.parse('output/qwen3-small/optimization-tests.xml').getroot().findall('.//testcase')
+          expected = {f'test_real_qwen_artifact_optimization_matches_ort[{level}]' for level in ('none', 'basic', 'all')}
+          assert len(cases) == 3 and {case.get('name') for case in cases} == expected
+          assert not any(case.find(tag) is not None for case in cases for tag in ('skipped', 'failure', 'error'))
+          print('Qwen artifact integration: 3 passed, 0 skipped')
+          PY
+
+      - name: Qwen3 small probe regressions
+        id: qwen3_small_tests
+        env:
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: |
+          set -euo pipefail
+          "$QWEN3_PY" -m pytest \
+            tests/test_qwen3_small_probe.py \
+            tests/test_qwen3_small_model.py \
+            tests/test_qwen3_small_gate.py tests/test_qwen3_small_reports.py -q \
+            --junit-xml=output/qwen3-small/tests.xml
+
+      - name: "numeric:qemu-qwen3-small"
+        id: qwen3_riscv
+        timeout-minutes: 25
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: |
+          set -euo pipefail
+          "$QWEN3_PY" probes/w2_qwen3_small/riscv.py \
+            --model-dir output/qwen3-small --output-dir output/qwen3-riscv
+
+      - name: Summarize W2 unit gates
+        if: always()
+        env:
+          FRONTEND_OUTCOME: ${{ steps.frontend_ops.outcome }}
+          BACKEND_OUTCOME: ${{ steps.backend_ops.outcome }}
+          RUNTIME_OUTCOME: ${{ steps.runtime.outcome }}
+          RUNTIME_MODEL_OUTCOME: ${{ steps.runtime_model.outcome }}
+        run: |
+          {
+            echo "## W2 frontend, backend and host runtime"
+            echo "unit:frontend-ops: $FRONTEND_OUTCOME"
+            echo "unit:backend-ops: $BACKEND_OUTCOME"
+            echo "unit:runtime: $RUNTIME_OUTCOME"
+            echo "integration:runtime-model: $RUNTIME_MODEL_OUTCOME"
+            emit_report() {
+              report="$1"; outcome="$2"
+              if [ "$outcome" = "skipped" ] || [ -z "$outcome" ]; then
+                echo "Not run / 未运行: $report. No numerical acceptance result."
+              elif [ -f "$report" ]; then
+                cat "$report"
+              else
+                echo "Report unavailable / 未生成报告: $report (step: $outcome). No numerical acceptance result; inspect logs."
+              fi
+            }
+            emit_report output/w2-backend-ops/report.md "$BACKEND_OUTCOME"
+            emit_report output/w2-runtime/report.md "$RUNTIME_OUTCOME"
+            emit_report output/w2-runtime-model/report.md "$RUNTIME_MODEL_OUTCOME"
+            echo "These gates do not execute full-model IR/QEMU or text generation."
+          }
+
+      - name: Upload W2 unit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: w2-unit-gates-output
+          path: |
+            output/w2-backend-ops/
+            output/w2-runtime/
+            output/w2-runtime-model/report.*
+            output/w2-frontend-ops.xml
+            output/w2-runtime-tests.xml
+          if-no-files-found: ignore
+
+      - name: Upload RISC-V tensor evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: riscv-tensor-probe-output
+          path: |
+            output/qemu-matmul/
+            output/qwen3-riscv/
+            output/process-cleanup-repeats/*.xml
+          if-no-files-found: ignore
+
+      - name: Summarize RISC-V numeric gate
+        if: always()
+        env:
+          PROBE_OUTCOME: ${{ steps.qwen3_riscv.outcome }}
+        run: |
+          {
+            echo "## numeric:qemu-qwen3-small"
+            echo "Outcome: $PROBE_OUTCOME"
+            if [ "$PROBE_OUTCOME" = "skipped" ] || [ -z "$PROBE_OUTCOME" ]; then
+              echo "Not run / 未运行. No QEMU numerical acceptance result."
+            elif [ -f output/qwen3-riscv/report.md ]; then
+              cat output/qwen3-riscv/report.md
+            else
+              echo "Report unavailable / 未生成报告. No QEMU numerical acceptance result; inspect logs."
+            fi
+          }
+
+      - name: Summarize Qwen3 small probe
+        if: always()
+        env:
+          PROBE_OUTCOME: ${{ steps.qwen3_small.outcome }}
+          TEST_OUTCOME: ${{ steps.qwen3_small_tests.outcome }}
+          ARTIFACT_TEST_OUTCOME: ${{ steps.qwen3_artifact_tests.outcome }}
+        run: |
+          {
+            echo "## numeric:ir-qwen3-small"
+            echo "Probe: $PROBE_OUTCOME; regression tests: $TEST_OUTCOME"
+            echo "Explicit artifact integration (requires 3 passed / 0 skipped): $ARTIFACT_TEST_OUTCOME"
+            echo ""
+            if [ "$PROBE_OUTCOME" = "skipped" ] || [ -z "$PROBE_OUTCOME" ]; then
+              echo "Not run / 未运行. No IR numerical acceptance result."
+            elif [ -f output/qwen3-small/report.md ]; then
+              cat output/qwen3-small/report.md
+            else
+              echo "Report unavailable / 未生成报告. No IR numerical acceptance result; inspect logs."
+            fi
+          }
+
+      - name: Upload Qwen3 small probe artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-small-probe-output
+          path: output/qwen3-small/
+          if-no-files-found: ignore
+
+      - name: Upload W1 reproduction environment
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: w1-reproduction-environment
+          path: output/w1-repro-env/
+          if-no-files-found: ignore
+
+      - name: Upload probe artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: w1-probe-output
+          path: probes/**/out/
+          if-no-files-found: ignore
+
+      # ── 状态汇总 ──────────────────────────────────────────────────────
+      - name: W1 交付物状态
+        if: always()
+        env:
+          DOCS_OUTCOME: ${{ steps.docs.outcome }}
+          MATMUL_OUTCOME: ${{ steps.matmul.outcome }}
+          TRANSFORMER_OUTCOME: ${{ steps.transformer.outcome }}
+          QWEN_IR_OUTCOME: ${{ steps.qwen3_small.outcome }}
+          QWEN_RISCV_OUTCOME: ${{ steps.qwen3_riscv.outcome }}
+        run: |
+          {
+            echo "## W1 / small Qwen3 execution status"
+            echo ""
+            echo "| Gate | Actual step outcome |"
+            echo "|---|---|"
+            echo "| Document structure | $DOCS_OUTCOME |"
+            echo "| QEMU MatMul | $MATMUL_OUTCOME |"
+            echo "| Synthetic Transformer IR | $TRANSFORMER_OUTCOME |"
+            echo "| Real Qwen3 structure IR | $QWEN_IR_OUTCOME |"
+            echo "| Real Qwen3 structure QEMU | $QWEN_RISCV_OUTCOME |"
+            echo ""
+            echo "Full-model ORT validation runs in the separate manual/nightly job."
+            echo "Document checks do not certify team interface approval or second-person reproduction."
+          }
+
+  full-qwen3-onnx:
+    name: "W1 / full Qwen3 ONNX release validation"
+    # This fetches the pinned LFS objects and executes the complete FP32 model. It is not
+    # counted as a passing gate on PRs where it did not execute.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Cache full-model LFS objects
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: qwen3-onnx-lfs-${{ runner.os }}-${{ hashFiles('assets/qwen3-0.6b/onnx/*') }}
+      - name: Fetch full-model LFS assets
+        run: |
+          git lfs install --local
+          git lfs pull --include="assets/qwen3-0.6b/onnx/*" --exclude=""
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned full-model validation dependencies
+        run: |
+          python3 -m pip install -v -e ".[llm-deploy]"
+          python3 -m pip check
+      - name: "probe:qwen3-onnx"
+        id: full_model
+        env:
+          OMP_NUM_THREADS: "2"
+          OPENBLAS_NUM_THREADS: "2"
+        run: |
+          set -euo pipefail
+          python3 "$PROBE_QWEN3_EXPORT" --mode verify \
+            --model-dir assets/qwen3-0.6b/onnx \
+            --output-dir output/qwen3-full-probe --threads 2
+      - name: Summarize full-model gate
+        if: always()
+        env:
+          PROBE_OUTCOME: ${{ steps.full_model.outcome }}
+        run: |
+          {
+            echo "## probe:qwen3-onnx (complete FP32 release, ORT CPU)"
+            echo "Outcome: $PROBE_OUTCOME"
+            if [ -f output/qwen3-full-probe/report.md ]; then
+              cat output/qwen3-full-probe/report.md
+            else
+              echo "No report produced; inspect the failed step."
+            fi
+            echo "This validates the complete ONNX artifact, not ScratchV full-model execution."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload full-model validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-full-onnx-probe-output
+          path: output/qwen3-full-probe/
+          if-no-files-found: ignore
+
+
+  full-qwen3-frontend:
+    name: "W2 / complete Qwen3 frontend"
+    # Required on PRs as well as manual/nightly runs. No full-model ORT or IR inference.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Cache full-model LFS objects
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: qwen3-onnx-lfs-${{ runner.os }}-${{ hashFiles('assets/qwen3-0.6b/onnx/*') }}
+      - name: Fetch full-model LFS assets
+        run: |
+          git lfs install --local
+          git lfs pull --include="assets/qwen3-0.6b/onnx/*" --exclude=""
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned frontend audit dependencies
+        run: |
+          python3 -m pip install -v -e ".[llm-deploy]"
+          python3 -m pip check
+      - name: "frontend:parse-qwen3"
+        id: full_frontend
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: |
+          set -euo pipefail
+          python3 "$PROBE_QWEN3_PARSE" \
+            --model-dir assets/qwen3-0.6b/onnx \
+            --output-dir output/qwen3-parse --timeout 1200
+      - name: Summarize complete Qwen3 frontend gate
+        if: always()
+        env:
+          PROBE_OUTCOME: ${{ steps.full_frontend.outcome }}
+        run: |
+          {
+            echo "## frontend:parse-qwen3"
+            echo "Outcome: $PROBE_OUTCOME"
+            if [ -f output/qwen3-parse/report.md ]; then
+              cat output/qwen3-parse/report.md
+            fi
+            echo "Complete graph and binding audit only; no full IR or QEMU numerical claim."
+          }
+      - name: Upload complete Qwen3 frontend evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-full-frontend-parse-output
+          path: output/qwen3-parse/
+          if-no-files-found: ignore
+
+  w2-acceptance:
+    name: "W2 / required acceptance"
+    needs: [llm-deploy, full-qwen3-frontend]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # 每个 artifact 的存储根目录不同：多路径上传的以 output/ 为根，单目录
+      # 上传的以该目录自身为根，所以只能逐个下载到各自的 --report-dir 位置。
+      - name: Download W2 unit gate reports
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: w2-unit-gates-output
+          path: output
+      - name: Download RISC-V tensor reports
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: riscv-tensor-probe-output
+          path: output
+      - name: Download Qwen3 small reports
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: qwen3-small-probe-output
+          path: output/qwen3-small
+      - name: Download complete Qwen3 frontend report
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: qwen3-full-frontend-parse-output
+          path: output/qwen3-parse
+      - name: List downloaded W2 reports
+        if: always()
+        run: find output -name report.json -print 2>/dev/null | sort || true
+      - name: Summarize W2 operators, precision and timing
+        if: always()
+        run: python3 scripts/summarize_w2_ci.py --report-dir output
+      - name: Require actual success from every W2 job
+        env:
+          W2_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: python3 scripts/check_w2_ci_results.py
+
+  w3-execution-summary:
+    name: "W3 / execution scope"
+    needs: [w3-validation]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: State whether W3 actually ran
+        env:
+          W3_RESULT: ${{ needs.w3-validation.result }}
+        run: |
+          python3 - <<'PY'
+          import os
+          result = os.environ.get("W3_RESULT", "")
+          labels = {"success": "PASS", "failure": "FAIL", "cancelled": "CANCELLED", "skipped": "NOT RUN"}
+          label = labels.get(result, "UNCONFIRMED")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
+              stream.write("## W3 execution scope\n\n")
+              stream.write(f"**{label}** — W3 preparation and full 28-layer IR numeric.\n\n")
+              if result == "skipped":
+                  stream.write("W3 is opt-in and is not executed by default on pull requests. W1/W2 success is not W3 acceptance.\n\n")
+              elif result == "success":
+                  stream.write("See the W3 preparation and W3 complete IR numeric summaries in this run for numerical data.\n\n")
+              else:
+                  stream.write("No W3 acceptance claimed; inspect the called jobs and any partial evidence.\n\n")
+              stream.write("<details><summary>Scope and evidence</summary>\n\nManual LLM Deploy runs can enable `run_w3_validation`. "
+                           "Numerical reports are retained in `w3-preparation-reports` and `w3-full-numeric-reports` when generated. "
+                           "Full-model QEMU is a separate W4 gate; independent reproduction and team sign-off remain separate.\n\n</details>\n")
+          PY

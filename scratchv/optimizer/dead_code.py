@@ -28,23 +28,17 @@ class DeadCodeEliminator(OptimizationPass):
         return sum(self._eliminate_function(func) for func in program.functions)
 
     def _eliminate_function(self, func: Function) -> int:
-        # A definition in one block may be consumed by another block or phi.
-        # This conservative one-pass DCE keeps every function-wide use; it
-        # does not attempt CFG reachability or iterative dead-chain removal.
-        used = {
-            operand.name
-            for block in func.blocks
-            for instr in (*block.phi_nodes, *block.instructions)
-            for operand in instr.operands
-        }
+        # SSA values can be consumed in another block, including PHI edges.
+        # Collect uses across the whole function before filtering any block;
+        # block-local liveness can erase a still-needed dominating definition.
+        used = {value.name for value in func.returns}
+        for block in func.blocks:
+            for instr in [*block.phi_nodes, *block.instructions]:
+                used.update(value.name for value in instr.operands)
         return sum(self._eliminate_block(block, used) for block in func.blocks)
 
-    def _eliminate_block(self, block: BasicBlock,
-                         used: set[str] | None = None) -> int:
+    def _eliminate_block(self, block: BasicBlock, used: set[str]) -> int:
         changes = 0
-        if used is None:
-            used = {operand.name for instr in (*block.phi_nodes, *block.instructions)
-                    for operand in instr.operands}
 
         # Filter: keep instructions with side effects or whose dest is used
         new_instrs: list[Instruction] = []
