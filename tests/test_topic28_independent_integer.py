@@ -1,4 +1,4 @@
-"""N1/N3/N4: typed integer pipelines must preserve values and valid IR."""
+"""Typed integer pipelines must preserve values and valid IR."""
 
 import numpy as np
 import pytest
@@ -90,7 +90,7 @@ def compile_memory(
 
 class TestIntegerOptimizationSemantics:
     @pytest.mark.parametrize("operator", ["Add", "Mul"])
-    def test_n1_parser_leaves_integer_arithmetic_to_typed_folder(
+    def test_parser_leaves_integer_arithmetic_to_typed_folder(
         self, operator, tmp_path
     ):
         path, _ = integer_model(tmp_path, operator, "Div")
@@ -114,7 +114,7 @@ class TestIntegerOptimizationSemantics:
             ("Mul", "Min", -2),
         ],
     )
-    def test_n1_overflow_chain_matches_onnx_and_qemu(
+    def test_overflow_chain_matches_onnx_and_qemu(
         self, level, operator, final, expected, tmp_path
     ):
         from onnx.reference import ReferenceEvaluator
@@ -135,7 +135,7 @@ class TestIntegerOptimizationSemantics:
 
     @pytest.mark.parametrize("level", LEVELS)
     @pytest.mark.parametrize("input_value", [7, -7])
-    def test_n3_integer_identity_keeps_result_definition(
+    def test_integer_identity_keeps_result_definition(
         self, level, input_value, tmp_path
     ):
         assert compile_memory(tmp_path, "n3", input_value, "greedy", True, level) == (
@@ -144,7 +144,7 @@ class TestIntegerOptimizationSemantics:
 
     @pytest.mark.parametrize("level", LEVELS)
     @pytest.mark.parametrize("input_value", [7, -7])
-    def test_n4_integer_mul_add_keeps_both_operations(
+    def test_integer_mul_add_keeps_both_operations(
         self, level, input_value, tmp_path
     ):
         assert compile_memory(tmp_path, "n4", input_value, "greedy", True, level) == (
@@ -154,11 +154,11 @@ class TestIntegerOptimizationSemantics:
     @pytest.mark.parametrize(
         "passes", [("ir-peephole",), ("ir-peephole", "ir-peephole")]
     )
-    def test_n3_explicit_identity_passes_are_safe(self, passes, tmp_path):
+    def test_explicit_identity_passes_are_safe(self, passes, tmp_path):
         assert compile_memory(tmp_path, "n3", 7, "greedy", True, passes=passes) == 2
 
     @pytest.mark.parametrize(
         "passes", [("muladd-fusion",), ("muladd-fusion", "muladd-fusion")]
     )
-    def test_n4_explicit_fusion_passes_are_safe(self, passes, tmp_path):
+    def test_explicit_fusion_passes_are_safe(self, passes, tmp_path):
         assert compile_memory(tmp_path, "n4", 7, "greedy", True, passes=passes) == 7

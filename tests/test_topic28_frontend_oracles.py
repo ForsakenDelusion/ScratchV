@@ -1,4 +1,8 @@
-"""Review R6/R7/R9 regressions: typed guards and honest FP references."""
+"""Typed guards and honest FP references.
+
+The DSL interpreter, straight-line IR trace and QEMU are kept as independent
+oracles; reference-only results are never treated as binary evidence.
+"""
 
 from __future__ import annotations
 
@@ -74,7 +78,7 @@ class TestFrontendReferenceSemantics:
             "3E+0 > a",
         ],
     )
-    def test_r6_integer_guards_emit_actual_int_constants(
+    def test_integer_guards_emit_actual_int_constants(
         self, kind, condition, tmp_path
     ):
         source = guard_source(kind, condition)
@@ -111,7 +115,7 @@ class TestFrontendReferenceSemantics:
         ],
     )
     @pytest.mark.parametrize("left_literal", [False, True])
-    def test_r6_integer_guards_reject_fraction_or_out_of_range(
+    def test_integer_guards_reject_fraction_or_out_of_range(
         self, kind, literal, left_literal
     ):
         condition = f"{literal} < a" if left_literal else f"a < {literal}"
@@ -121,7 +125,7 @@ class TestFrontendReferenceSemantics:
     @pytest.mark.parametrize("kind", ["if", "while"])
     @pytest.mark.parametrize("literal", ["1e-3", "1e+3", "-1E-3", "+1E+3"])
     @pytest.mark.parametrize("left_literal", [False, True])
-    def test_r9_scientific_conditions_validator_and_parser_agree(
+    def test_scientific_conditions_validator_and_parser_agree(
         self, kind, literal, left_literal, tmp_path
     ):
         condition = f"{literal} < a" if left_literal else f"a < {literal}"
@@ -143,7 +147,7 @@ class TestFrontendReferenceSemantics:
 
     @pytest.mark.parametrize("kind", ["if", "while"])
     @pytest.mark.parametrize("literal", ["1e", "1e+", "--1e-3", "1.2.3"])
-    def test_r9_invalid_scientific_conditions_rejected_by_both(self, kind, literal):
+    def test_invalid_scientific_conditions_rejected_by_both(self, kind, literal):
         source = guard_source(kind, f"a < {literal}", "f64")
         parser = ExtendedDSLParser()
         assert parser.validate(source).has_errors
@@ -152,7 +156,7 @@ class TestFrontendReferenceSemantics:
 
     @pytest.mark.parametrize("implementation", ["dsl", "ir"])
     @pytest.mark.parametrize("dtype", ["f32", "f64"])
-    def test_r7_sqrt_reference_is_defined_and_preserves_precision(
+    def test_sqrt_reference_is_defined_and_preserves_precision(
         self, implementation, dtype
     ):
         source = f"a = const(4,dtype:{dtype})\nr = sqrt(a)\nreturn r"
@@ -163,7 +167,7 @@ class TestFrontendReferenceSemantics:
     @pytest.mark.parametrize("implementation", ["dsl", "ir"])
     @pytest.mark.parametrize("dtype", ["f32", "f64"])
     @pytest.mark.parametrize("op,left,right,expected", FP_MIN_MAX_CASES)
-    def test_r7_min_max_reference_number_nan_zero_and_precision(
+    def test_min_max_reference_number_nan_zero_and_precision(
         self,
         implementation,
         dtype,
@@ -184,7 +188,7 @@ class TestFrontendReferenceSemantics:
                 assert bool(np.signbit(result)) == bool(np.signbit(expected))
 
     @pytest.mark.parametrize("implementation", ["dsl", "ir"])
-    def test_r7_undefined_values_raise_instead_of_defaulting_to_zero(
+    def test_undefined_values_raise_instead_of_defaulting_to_zero(
         self, implementation
     ):
         with pytest.raises(ValueError, match="[Uu]ndefined.*missing"):
@@ -193,7 +197,7 @@ class TestFrontendReferenceSemantics:
     @pytest.mark.parametrize("implementation", ["dsl", "ir"])
     @pytest.mark.parametrize("dtype", [np.float32, np.float64])
     @pytest.mark.parametrize("op", ["min", "max"])
-    def test_r7_min_max_reference_broadcast_arrays_preserve_all_element_bits(
+    def test_min_max_reference_broadcast_arrays_preserve_all_element_bits(
         self, implementation, dtype, op
     ):
         left = np.asarray([np.nan, 4, -0.0, 0.0, -0.0, 0.0], dtype=dtype)
@@ -218,7 +222,7 @@ class TestFrontendReferenceSemantics:
             np.asarray(result).view(unsigned), expected.view(unsigned)
         )
 
-    def test_r7_unknown_ir_opcode_raises_instead_of_silent_none(self):
+    def test_unknown_ir_opcode_raises_instead_of_silent_none(self):
         program = DSLParser().parse("a = const(4)\nreturn a")
         program.functions[0].blocks[0].instructions.insert(
             1,
@@ -232,14 +236,14 @@ class TestFrontendReferenceSemantics:
             IRTraceExecutor(program).run({})
 
     @pytest.mark.parametrize("opcode", [OpCode.BR, OpCode.BR_IF])
-    def test_r7_straight_line_trace_rejects_cfg_instead_of_ignoring_branches(
+    def test_straight_line_trace_rejects_cfg_instead_of_ignoring_branches(
         self, opcode
     ):
         program = DSLParser().parse("a = const(4)\nreturn a")
         with pytest.raises(ValueError, match="Unsupported control flow"):
             IRTraceExecutor(program)._exec_instr(Instruction(opcode, target="next"))
 
-    def test_r7_verify_dsl_is_still_only_reference_not_binary_evidence(self):
+    def test_verify_dsl_is_still_only_reference_not_binary_evidence(self):
         result = verify_dsl("a = const(4)\nr = sqrt(a)\nreturn r", {})
         assert float(result["expected"]) == 2.0
         # The existing API is a placeholder. It must not be cited as a QEMU run.
@@ -247,7 +251,7 @@ class TestFrontendReferenceSemantics:
 
     @pytest.mark.parametrize("width", [32, 64])
     @pytest.mark.parametrize("op,left,right,expected", FP_MIN_MAX_CASES)
-    def test_r7_min_max_reference_bits_match_qemu(
+    def test_min_max_reference_bits_match_qemu(
         self, width, op, left, right, expected, tmp_path
     ):
         source = f"a = const({left},dtype:f{width})\nb = const({right},dtype:f{width})\nr = {op}(a,b)\nreturn r"
@@ -262,7 +266,7 @@ class TestFrontendReferenceSemantics:
 
     @pytest.mark.parametrize("width", [32, 64])
     @pytest.mark.parametrize("literal", ["4.0", "-0.0", "inf"])
-    def test_r7_sqrt_reference_bits_match_qemu(self, width, literal, tmp_path):
+    def test_sqrt_reference_bits_match_qemu(self, width, literal, tmp_path):
         source = f"a = const({literal},dtype:f{width})\nr = sqrt(a)\nreturn r"
         bits, flags = execute_fp(
             compile_source(source, tmp_path, width, "greedy"), tmp_path, width
@@ -277,7 +281,7 @@ class TestFrontendReferenceSemantics:
 
     @pytest.mark.parametrize("kind", ["if", "while"])
     @pytest.mark.parametrize("left_literal", [False, True])
-    def test_r6_verified_integer_control_flow_executes_on_qemu(
+    def test_verified_integer_control_flow_executes_on_qemu(
         self, kind, left_literal, tmp_path
     ):
         condition = "3 > a" if left_literal else "a < 3"
@@ -303,7 +307,7 @@ class TestFrontendReferenceSemantics:
     @pytest.mark.parametrize("kind", ["if", "while"])
     @pytest.mark.parametrize("literal", ["1e-3", "1e+3", "-1E-3", "+1E+3"])
     @pytest.mark.parametrize("left_literal", [False, True])
-    def test_r9_verified_scientific_conditions_execute_on_qemu(
+    def test_verified_scientific_conditions_execute_on_qemu(
         self, kind, literal, left_literal, tmp_path
     ):
         condition = f"{literal} < a" if left_literal else f"a < {literal}"

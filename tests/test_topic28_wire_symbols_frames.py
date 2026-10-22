@@ -1,4 +1,4 @@
-"""Fifth-review regressions: source bytes, symbols, ELF metadata and ABI frames."""
+"""ONNX wire encoding, symbol/ELF metadata and per-function ABI frames."""
 
 import re
 import struct
@@ -25,21 +25,8 @@ from scratchv.frontend.onnx_parser import ONNXParser
 from scratchv.ir.builder import IRBuilder
 from scratchv.ir.types import DataType as T
 from tests.topic28_runtime import observe
+from tests.topic28_onnx import length_field
 from tests.topic28_support import MODES, TARGETS, allocate, compile_ir, configuration
-
-
-def length_field(number, payload):
-    # Write independently of the production wire reader. No Python FP values
-    # ever represent the original signaling/payload bits in this fixture.
-    def varint(value):
-        result = bytearray()
-        while value > 127:
-            result.append((value & 127) | 128)
-            value >>= 7
-        result.append(value)
-        return bytes(result)
-
-    return varint(number * 8 + 2) + varint(len(payload)) + payload
 
 
 def typed_model(path, dtype, nt, raw, packed, operation, unknown_group_at=None):
@@ -87,12 +74,12 @@ def typed_model(path, dtype, nt, raw, packed, operation, unknown_group_at=None):
     assert raw.to_bytes(width, "little") in path.read_bytes()
 
 
-class TestTopic28FifthReviewRegressions:
+class TestWireSymbolsAndFrames:
     @pytest.mark.parametrize("target", TARGETS)
     @pytest.mark.parametrize("packed", [False, True])
     @pytest.mark.parametrize("pattern", ["snan", "qnan", "negative_zero"])
     @pytest.mark.parametrize("operation", ["return", "Min"])
-    def test_t12_typed_wire_bits_and_flags(
+    def test_typed_wire_bits_and_flags(
         self, target, packed, pattern, operation, tmp_path
     ):
         dtype, nt, isa, abi = target
@@ -141,7 +128,7 @@ class TestTopic28FifthReviewRegressions:
     @pytest.mark.parametrize("target", [TARGETS[0], TARGETS[2]])
     @pytest.mark.parametrize("packed", [False, True])
     @pytest.mark.parametrize("location", ["model", "graph", "tensor"])
-    def test_t12_unknown_protobuf_fields_preserve_source_bits(
+    def test_unknown_protobuf_fields_preserve_source_bits(
         self, target, packed, location, tmp_path
     ):
         dtype, nt, isa, abi = target
@@ -166,7 +153,7 @@ class TestTopic28FifthReviewRegressions:
     @pytest.mark.parametrize("count", [1, 22])
     @pytest.mark.parametrize("block", ["next", ".next"])
     @pytest.mark.parametrize("function", ["main", ".role_model"])
-    def test_t14_structured_blocks_do_not_create_frames(
+    def test_structured_blocks_do_not_create_frames(
         self, mode, count, block, function, tmp_path
     ):
         instructions = [
@@ -208,7 +195,7 @@ class TestTopic28FifthReviewRegressions:
     @pytest.mark.parametrize("verify", [False, True])
     @pytest.mark.parametrize("extended", [False, True])
     @pytest.mark.parametrize("name", [".text", ".data", ".rodata", ".bss"])
-    def test_t14_reserved_function_names_rejected_before_output(
+    def test_reserved_function_names_rejected_before_output(
         self, verify, extended, name, tmp_path
     ):
         # Keep every name, selector and verifier path; allocation is never reached.
@@ -237,7 +224,7 @@ class TestTopic28FifthReviewRegressions:
     @pytest.mark.parametrize("extended", [False, True])
     @pytest.mark.parametrize("verify", [False, True])
     @pytest.mark.parametrize("name", ["branch with space", "模型", "a,b"])
-    def test_t14_unsafe_blocks_rejected_before_output(
+    def test_unsafe_blocks_rejected_before_output(
         self, mode, extended, verify, name, tmp_path
     ):
         b = IRBuilder()
@@ -258,7 +245,7 @@ class TestTopic28FifthReviewRegressions:
     @pytest.mark.parametrize("mode", MODES)
     @pytest.mark.parametrize("extended", [False, True])
     @pytest.mark.parametrize("name", ["2branch", "x$y", ".Luser"])
-    def test_t14_supported_internal_symbols_execute(
+    def test_supported_internal_symbols_execute(
         self, mode, extended, name, tmp_path
     ):
         b = IRBuilder()
@@ -273,7 +260,7 @@ class TestTopic28FifthReviewRegressions:
         assert observe(assembly, tmp_path, separate=True) == (7, 0)
 
     @pytest.mark.parametrize("name", [".text", ".data", ".bss", ".rodata"])
-    def test_t14_reserved_call_targets_rejected(self, name):
+    def test_reserved_call_targets_rejected(self, name):
         allocation = allocate(
             [
                 MI(O.LABEL, target="main", label_role="function"),
@@ -285,7 +272,7 @@ class TestTopic28FifthReviewRegressions:
         with pytest.raises(ValueError, match="call symbol"):
             AsmEmitter(allocation.instructions).emit()
 
-    def test_t14_custom_section_cannot_be_a_label(self):
+    def test_custom_section_cannot_be_a_label(self):
         with pytest.raises(ValueError, match="label symbol"):
             AsmEmitter(
                 [
@@ -295,7 +282,7 @@ class TestTopic28FifthReviewRegressions:
             ).emit()
 
     @pytest.mark.parametrize("extended", [False, True])
-    def test_t14_elf_sizes_match_distinct_functions(self, extended, tmp_path):
+    def test_elf_sizes_match_distinct_functions(self, extended, tmp_path):
         b = IRBuilder()
         for name, value in [("first", 5), ("second", 9)]:
             b.new_function(name)
@@ -327,7 +314,7 @@ class TestTopic28FifthReviewRegressions:
 
     @pytest.mark.parametrize("mode", MODES)
     @pytest.mark.parametrize("dtype", [T.INT32, T.FLOAT32, T.FLOAT64])
-    def test_t15_local_frames_do_not_inherit_other_functions(
+    def test_local_frames_do_not_inherit_other_functions(
         self, mode, dtype, tmp_path
     ):
         b = IRBuilder()
@@ -366,7 +353,7 @@ class TestTopic28FifthReviewRegressions:
     @pytest.mark.parametrize(
         "dtype,count", [(T.INT32, 200), (T.FLOAT32, 200), (T.FLOAT64, 100)]
     )
-    def test_t15_spill_only_frames_are_per_function(self, mode, dtype, count, tmp_path):
+    def test_spill_only_frames_are_per_function(self, mode, dtype, count, tmp_path):
         width = 64 if dtype is T.FLOAT64 else 32
         kind = RC.GPR if dtype is T.INT32 else RC.FPR
         pool = []
@@ -436,7 +423,7 @@ class TestTopic28FifthReviewRegressions:
                 assembly, path, dtype, function=f"spill{index}", separate=True
             ) == (expected, 0)
 
-    def test_t15_single_oversized_local_frame_still_rejected(self, tmp_path):
+    def test_single_oversized_local_frame_still_rejected(self, tmp_path):
         b = IRBuilder()
         b.new_function("main")
         b.new_block("entry")

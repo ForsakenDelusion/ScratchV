@@ -1,4 +1,4 @@
-"""Topic 28 phase-2 typed floating-point selection contracts."""
+"""Floating-point instruction selection: typed IR, constants, memory, comparisons."""
 
 from __future__ import annotations
 

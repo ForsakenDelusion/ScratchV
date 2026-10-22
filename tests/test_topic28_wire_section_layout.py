@@ -1,4 +1,4 @@
-"""Sixth-review oracles: protobuf semantics, section sizes and dollar labels."""
+"""Protobuf merge semantics, function section sizes and dollar-label references."""
 
 import re
 import subprocess
@@ -22,33 +22,9 @@ from scratchv.backend.machine_types import (
 from scratchv.compiler import CompilerDriver
 from scratchv.frontend.onnx_parser import ONNXParser
 from scratchv.ir.types import DataType as T
+from tests.topic28_onnx import integer_field, length_field, typed_tensor
 from tests.topic28_support import MODES, TARGETS, allocate, configuration
 from tests.topic28_runtime import _required_tool, observe_abi as observe
-
-
-def varint(value):
-    result = bytearray()
-    while value > 127:
-        result.append((value & 127) | 128)
-        value >>= 7
-    return bytes(result + bytes([value]))
-
-
-def length_field(number, payload):
-    return varint(number * 8 + 2) + varint(len(payload)) + payload
-
-
-def integer_field(number, value):
-    return varint(number * 8) + varint(value)
-
-
-def typed_tensor(nt, raw, packed, name="a"):
-    width, field, wire = (4, 4, 5) if nt == TP.FLOAT else (8, 10, 1)
-    payload = raw.to_bytes(width, "little")
-    prefix = TP(name=name, data_type=nt).SerializeToString()
-    return prefix + (
-        length_field(field, payload) if packed else varint(field * 8 + wire) + payload
-    )
 
 
 def write_model(path, nt, tensors, operation, *, split_graph=False):
@@ -123,11 +99,11 @@ def function_body(name, count, value, role):
     return result
 
 
-class TestTopic28SixthReviewRegressions:
+class TestWireAndSectionLayout:
     @pytest.mark.parametrize("target", TARGETS)
     @pytest.mark.parametrize("packed", [False, True])
     @pytest.mark.parametrize("operation", ["return", "Sqrt"])
-    def test_t16_repeated_name_uses_final_initializer_identity(
+    def test_repeated_name_uses_final_initializer_identity(
         self, target, packed, operation, tmp_path
     ):
         # Wire decoding precedes allocation. Keep both encodings and all targets;
@@ -160,7 +136,7 @@ class TestTopic28SixthReviewRegressions:
     @pytest.mark.parametrize("packed", [False, True])
     @pytest.mark.parametrize("operation", ["return", "Min"])
     @pytest.mark.parametrize("variant", ["default_metadata", "unknown_raw_wire"])
-    def test_t12_storage_discriminator_preserves_typed_bits(
+    def test_storage_discriminator_preserves_typed_bits(
         self, target, packed, operation, variant, tmp_path
     ):
         _, nt, _, _ = target
@@ -205,7 +181,7 @@ class TestTopic28SixthReviewRegressions:
             "wrapped_location",
         ],
     )
-    def test_t12_t16_singular_wire_and_graph_merge_semantics(
+    def test_singular_wire_and_graph_merge_semantics(
         self, target, variant, tmp_path
     ):
         _, nt, _, _ = target
@@ -251,7 +227,7 @@ class TestTopic28SixthReviewRegressions:
 
     @pytest.mark.parametrize("target", TARGETS)
     @pytest.mark.parametrize("storage", ["raw", "external"])
-    def test_t12_actual_raw_and_external_storage_remain_bit_exact(
+    def test_actual_raw_and_external_storage_remain_bit_exact(
         self, target, storage, tmp_path
     ):
         _, nt, _, _ = target
@@ -281,7 +257,7 @@ class TestTopic28SixthReviewRegressions:
     )
     @pytest.mark.parametrize("count", [1, 24])
     @pytest.mark.parametrize("sections", ["between", "trailing", "both", "same"])
-    def test_t14_function_sizes_survive_section_switches_and_abi(
+    def test_function_sizes_survive_section_switches_and_abi(
         self, mode, roles, count, sections, tmp_path
     ):
         first, second = (
@@ -337,7 +313,7 @@ class TestTopic28SixthReviewRegressions:
         assert int(a[2]) == first_end - int(a[1], 16)
         assert int(b[2]) == section_sizes[int(b[6])] - int(b[1], 16)
 
-    def test_t14_function_body_cannot_silently_span_sections(self):
+    def test_function_body_cannot_silently_span_sections(self):
         instructions = [
             MI(O.LABEL, target="main", label_role="function"),
             MI(O.LI, P.reg("a0"), P.immediate(7)),
@@ -352,7 +328,7 @@ class TestTopic28SixthReviewRegressions:
     @pytest.mark.parametrize("label", ["$foo", "foo$bar", ".Lfoo", ".$foo"])
     @pytest.mark.parametrize("fallback", [False, True])
     @pytest.mark.parametrize("op", [O.J, O.JAL, O.BNEZ, O.BEQ, O.BNE, O.BLT, O.BGE])
-    def test_t14_internal_dollar_branch_references_execute(
+    def test_internal_dollar_branch_references_execute(
         self, label, fallback, op, tmp_path
     ):
         operands = {
@@ -389,7 +365,7 @@ class TestTopic28SixthReviewRegressions:
     @pytest.mark.parametrize("mode", MODES)
     @pytest.mark.parametrize("label", ["$pool", "pool$bits", ".Lpool", ".$pool"])
     @pytest.mark.parametrize("target", TARGETS)
-    def test_t14_internal_dollar_address_references_execute(
+    def test_internal_dollar_address_references_execute(
         self, mode, label, target, tmp_path
     ):
         dtype, nt, isa, abi = target

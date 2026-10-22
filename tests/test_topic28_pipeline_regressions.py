@@ -1,10 +1,13 @@
-"""Third-review regressions checked with real RV32 execution."""
+"""Pipeline regressions: name collisions, CFG definition order, LICM and loops.
+
+Every contract here is checked against real RV32 assembly/execution rather
+than opcode shape.
+"""
 
 import struct
 import subprocess
 
 import numpy as np
-import onnx
 import pytest
 from onnx import TensorProto, helper, numpy_helper
 from onnx.reference import ReferenceEvaluator
@@ -17,6 +20,7 @@ from scratchv.frontend.onnx_parser import ONNXParser
 from scratchv.ir.builder import IRBuilder
 from scratchv.ir.types import DataType as T, OpCode, Value
 from scratchv.optimizer.licm import LICM
+from tests.topic28_onnx import save_graph as save_model
 from tests.topic28_runtime import _qemu, _required_tool, execute_fp, execute_i32
 
 
@@ -62,14 +66,6 @@ def assert_return(assembly, tmp_path, dtype, expected, argument=None):
             bits(expected, width),
             0,
         )
-
-
-def save_model(graph, tmp_path):
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
-    onnx.checker.check_model(model)
-    path = tmp_path / "input.onnx"
-    onnx.save(model, path)
-    return path, model
 
 
 def execute_fixed_address(assembly, tmp_path, dtype):
@@ -128,12 +124,12 @@ PIPELINES = [
 ]
 
 
-class TestTopic28ThirdReviewRegressions:
+class TestPipelineRegressions:
     @pytest.mark.parametrize("dtype", TYPES)
     @pytest.mark.parametrize(
         "collision", ["parameter", "later_parameter", "initializer"]
     )
-    def test_t1_onnx_names_cannot_alias_generated_values(
+    def test_onnx_names_cannot_alias_generated_values(
         self, dtype, collision, tmp_path
     ):
         parameter = {"parameter": "v_2", "later_parameter": "v_3"}.get(
@@ -181,7 +177,7 @@ class TestTopic28ThirdReviewRegressions:
         assert result.success, result.errors
         assert_return(result.output_text, tmp_path, dtype, expected, 2)
 
-    def test_t1_builder_reserves_explicit_and_external_operand_names(self):
+    def test_builder_reserves_explicit_and_external_operand_names(self):
         b = IRBuilder()
         b.new_function("main", [Value("v_1", T.INT32)])
         b.new_block("entry")
@@ -195,7 +191,7 @@ class TestTopic28ThirdReviewRegressions:
 
     @pytest.mark.parametrize("verify", [False, True])
     @pytest.mark.parametrize("shape", [(2,), (1, 2), (0,)])
-    def test_t2_integer_initializer_tensor_is_rejected_before_output(
+    def test_integer_initializer_tensor_is_rejected_before_output(
         self, verify, shape, tmp_path
     ):
         initializers = [
@@ -230,7 +226,7 @@ class TestTopic28ThirdReviewRegressions:
             ExtendedInstructionSelector(ONNXParser().parse(str(path))).run()
 
     @pytest.mark.parametrize("shape", [(), (1,), (1, 1)])
-    def test_t2_integer_scalar_shapes_are_not_rejected(self, shape, tmp_path):
+    def test_integer_scalar_shapes_are_not_rejected(self, shape, tmp_path):
         path, model = save_model(
             helper.make_graph(
                 [helper.make_node("Add", ["a", "b"], ["out"])],
@@ -259,7 +255,7 @@ class TestTopic28ThirdReviewRegressions:
         [(T.INT32, False), (T.INT32, True), (T.FLOAT32, True), (T.FLOAT64, True)],
     )
     @pytest.mark.parametrize("source", ["load_const", "inline"])
-    def test_t3_constant_address_load_executes(
+    def test_constant_address_load_executes(
         self, mode, dtype, extended, source, tmp_path
     ):
         b = IRBuilder()
@@ -282,7 +278,7 @@ class TestTopic28ThirdReviewRegressions:
     @pytest.mark.parametrize("mode", MODES)
     @pytest.mark.parametrize("dtype", [T.FLOAT32, T.FLOAT64])
     @pytest.mark.parametrize("consumer", ["return", "arithmetic", "store", "branch"])
-    def test_t4_fp_definition_uses_cfg_not_block_layout(
+    def test_fp_definition_uses_cfg_not_block_layout(
         self, mode, dtype, consumer, tmp_path
     ):
         b = IRBuilder()
@@ -322,7 +318,7 @@ class TestTopic28ThirdReviewRegressions:
     @pytest.mark.parametrize(
         "case", ["use_before_definition", "not_dominating", "address_as_data"]
     )
-    def test_t4_forward_source_inventory_does_not_accept_invalid_definitions(
+    def test_forward_source_inventory_does_not_accept_invalid_definitions(
         self, dtype, case, tmp_path
     ):
         b = IRBuilder()
@@ -355,7 +351,7 @@ class TestTopic28ThirdReviewRegressions:
         "dtype,extended",
         [(T.INT32, False), (T.INT32, True), (T.FLOAT32, True), (T.FLOAT64, True)],
     )
-    def test_t8_layout_forward_definition_is_not_a_function_live_in(
+    def test_layout_forward_definition_is_not_a_function_live_in(
         self, mode, dtype, extended, tmp_path
     ):
         b = IRBuilder()
@@ -407,7 +403,7 @@ class TestTopic28ThirdReviewRegressions:
                 assert depth == 1
 
     @pytest.mark.parametrize("level", LEVELS)
-    def test_t9_licm_multiple_invariants_preserve_loop_and_instruction_order(
+    def test_licm_multiple_invariants_preserve_loop_and_instruction_order(
         self, level, tmp_path
     ):
         b = IRBuilder()
@@ -436,7 +432,7 @@ class TestTopic28ThirdReviewRegressions:
 
     @pytest.mark.parametrize("mode", MODES)
     @pytest.mark.parametrize("dtype", [T.FLOAT32, T.FLOAT64])
-    def test_t5_block_and_pool_symbols_and_br_targets_do_not_collide(
+    def test_block_and_pool_symbols_and_br_targets_do_not_collide(
         self, mode, dtype, tmp_path
     ):
         b = IRBuilder()
@@ -468,7 +464,7 @@ class TestTopic28ThirdReviewRegressions:
     @pytest.mark.parametrize("mode", MODES)
     @pytest.mark.parametrize("extended", [False, True])
     @pytest.mark.parametrize("case", ["zero", "sum", "nested", "label_collision"])
-    def test_t6_for_loops_cross_assemble_and_execute(
+    def test_for_loops_cross_assemble_and_execute(
         self, mode, extended, case, tmp_path
     ):
         b = IRBuilder()

@@ -1,4 +1,4 @@
-"""R1/R4: optimization must preserve actual hard-float values and fflags.
+"""Optimization must preserve actual hard-float values and fflags.
 
 Inputs and expected bit patterns are independent of the optimizer and are
 checked by Clang/LLD-linked executables running under QEMU, not opcode shape.
@@ -17,7 +17,6 @@ from scratchv.optimizer.constant_folding import ConstantFolder
 from tests.topic28_runtime import execute_fp
 
 
-MODES = ("naive", "greedy", "linear")
 LEVELS = ("none", "basic", "all")
 
 
@@ -55,7 +54,6 @@ def make_parameter_model(tmp_path, dtype, case):
 
 
 class TestFloatingPointOptimizationGuards:
-    @pytest.mark.parametrize("mode", MODES)
     @pytest.mark.parametrize("level", LEVELS)
     @pytest.mark.parametrize(
         "case,dtype,source,expected,flags",
@@ -94,9 +92,8 @@ class TestFloatingPointOptimizationGuards:
             ),
         ],
     )
-    def test_r1_constants_preserve_target_precision_rounding_and_flags(
+    def test_constants_preserve_target_precision_rounding_and_flags(
         self,
-        mode,
         level,
         case,
         dtype,
@@ -105,21 +102,22 @@ class TestFloatingPointOptimizationGuards:
         flags,
         tmp_path,
     ):
+        # Value/fflags semantics belong to the optimizer, not to register
+        # allocation; allocator coverage lives in the backend suites.
         result = CompilerDriver(
             CompilerConfig(
                 use_extended_isel=True,
                 target_isa="rv32imfd",
                 target_abi="ilp32d",
-                reg_alloc=mode,
+                reg_alloc="greedy",
                 optimize_level=level,
                 verify_ir=True,
             )
         ).compile("", str(tmp_path / "compiled.s"), dsl_source=source)
         assert result.success, (case, result.errors)
         actual = execute_fp(result.output_text, tmp_path, 32 if dtype == "f32" else 64)
-        assert actual == (expected, flags), (case, mode, level, actual)
+        assert actual == (expected, flags), (case, level, actual)
 
-    @pytest.mark.parametrize("mode", MODES)
     @pytest.mark.parametrize("level", LEVELS)
     @pytest.mark.parametrize("dtype", ("f32", "f64"))
     @pytest.mark.parametrize(
@@ -133,9 +131,8 @@ class TestFloatingPointOptimizationGuards:
             ("mul-zero-infinity", float("inf"), float("nan"), 16),
         ],
     )
-    def test_r4_parameter_optimization_preserves_bits_and_flags(
+    def test_parameter_optimization_preserves_bits_and_flags(
         self,
-        mode,
         level,
         dtype,
         case,
@@ -150,7 +147,7 @@ class TestFloatingPointOptimizationGuards:
                 use_extended_isel=True,
                 target_isa="rv32imfd",
                 target_abi="ilp32d",
-                reg_alloc=mode,
+                reg_alloc="greedy",
                 optimize_level=level,
                 verify_ir=True,
             )
@@ -163,7 +160,7 @@ class TestFloatingPointOptimizationGuards:
             else fp_bits(expected_value, width)
         )
         actual = execute_fp(result.output_text, tmp_path, width, argument=argument)
-        assert actual == (expected_bits, flags), (case, mode, level, actual)
+        assert actual == (expected_bits, flags), (case, level, actual)
 
     @pytest.mark.parametrize(
         "passes",
@@ -173,7 +170,7 @@ class TestFloatingPointOptimizationGuards:
             ("constant-folding", "ir-peephole", "muladd-fusion"),
         ],
     )
-    def test_r4_explicit_pass_selection_cannot_bypass_hard_float_guards(
+    def test_explicit_pass_selection_cannot_bypass_hard_float_guards(
         self, passes, tmp_path
     ):
         path = make_parameter_model(tmp_path, "f64", "muladd")
@@ -212,7 +209,7 @@ class TestFloatingPointOptimizationGuards:
             ),
         ],
     )
-    def test_r1_explicit_folding_pass_uses_the_same_precision_guard(
+    def test_explicit_folding_pass_uses_the_same_precision_guard(
         self,
         dtype,
         source,
@@ -253,7 +250,7 @@ class TestFloatingPointOptimizationGuards:
             OpCode.ABS,
         ),
     )
-    def test_r1_safe_folder_does_not_mutate_floating_instruction_or_value(
+    def test_safe_folder_does_not_mutate_floating_instruction_or_value(
         self, dtype, opcode
     ):
         builder = IRBuilder()
@@ -272,7 +269,7 @@ class TestFloatingPointOptimizationGuards:
         assert block.instructions[0] is instruction
         assert not result.is_constant and result.const_value is None
 
-    def test_r1_safe_folder_retains_integer_wraparound_folding(self):
+    def test_safe_folder_retains_integer_wraparound_folding(self):
         builder = IRBuilder()
         builder.new_function("main")
         block = builder.new_block("entry")

@@ -1,4 +1,4 @@
-"""Typed allocation, mixed frames and real RV32 cross-assembly acceptance."""
+"""Floating-point backend integration: allocation, spills, frames, execution."""
 
 from __future__ import annotations
 

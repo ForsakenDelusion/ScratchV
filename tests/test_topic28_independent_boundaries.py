@@ -1,4 +1,4 @@
-"""N2/N6/N7: unsupported input must fail before producing an executable."""
+"""Rejected and boundary typed inputs must fail before producing an executable."""
 
 import struct
 
@@ -59,7 +59,7 @@ class TestTypedInputBoundaries:
     @pytest.mark.parametrize("verify", [False, True])
     @pytest.mark.parametrize("width", [32, 64])
     @pytest.mark.parametrize("shape", [(2,), (1, 2), (0,)])
-    def test_n2_non_scalar_initializer_is_rejected(
+    def test_non_scalar_initializer_is_rejected(
         self, verify, width, shape, tmp_path
     ):
         path = float_model(tmp_path, width, shape)
@@ -75,7 +75,7 @@ class TestTypedInputBoundaries:
 
     @pytest.mark.parametrize("verify", [False, True])
     @pytest.mark.parametrize("width", [32, 64])
-    def test_n2_non_scalar_declared_output_is_rejected(self, verify, width, tmp_path):
+    def test_non_scalar_declared_output_is_rejected(self, verify, width, tmp_path):
         path = float_model(tmp_path, width, (), output_shape=(2,))
         result = CompilerDriver(config("greedy", verify)).compile(
             str(path), str(tmp_path / "out.s")
@@ -89,7 +89,7 @@ class TestTypedInputBoundaries:
     @pytest.mark.parametrize(
         "case", ["direct_return", "parameter_alias", "initializer_alias"]
     )
-    def test_n2_declared_shape_cannot_hide_source_shape(self, width, case, tmp_path):
+    def test_declared_shape_cannot_hide_source_shape(self, width, case, tmp_path):
         onnx = pytest.importorskip("onnx")
         tensor_type = onnx.TensorProto.FLOAT if width == 32 else onnx.TensorProto.DOUBLE
         array_type = np.float32 if width == 32 else np.float64
@@ -141,7 +141,7 @@ class TestTypedInputBoundaries:
     @pytest.mark.parametrize("verify", [False, True])
     @pytest.mark.parametrize("width,dtype", FLOATS)
     @pytest.mark.parametrize("consumer", ["sqrt", "add", "return", "store"])
-    def test_n7_inline_fp_constant_without_definition_is_rejected(
+    def test_inline_fp_constant_without_definition_is_rejected(
         self, verify, width, dtype, consumer, tmp_path
     ):
         b = IRBuilder()
@@ -173,7 +173,7 @@ class TestTypedInputBoundaries:
     @pytest.mark.parametrize(
         "source", ["load_const", "global", "parameter", "arithmetic"]
     )
-    def test_n7_defined_fp_sources_still_execute(
+    def test_defined_fp_sources_still_execute(
         self, mode, width, dtype, source, tmp_path
     ):
         b = IRBuilder()
@@ -210,7 +210,7 @@ class TestTypedInputBoundaries:
         "literal",
         ["2147483648", "-2147483649", "99999999999999999999", "-99999999999999999999"],
     )
-    def test_n6_out_of_range_i32_constant_is_a_frontend_error(
+    def test_out_of_range_i32_constant_is_a_frontend_error(
         self, verify, literal, tmp_path
     ):
         source = f"a = const({literal},dtype:i32)\nb = const(2,dtype:i32)\nr = div(a,b)\nreturn r"
@@ -235,7 +235,7 @@ class TestTypedInputBoundaries:
         assert output.read_text() == "preserve previous output"
 
     @pytest.mark.parametrize("value", [-2147483648, 2147483647])
-    def test_n6_i32_boundary_constants_execute(self, value, tmp_path):
+    def test_i32_boundary_constants_execute(self, value, tmp_path):
         result = CompilerDriver(
             CompilerConfig(
                 use_extended_isel=True,
@@ -252,11 +252,11 @@ class TestTypedInputBoundaries:
         assert execute_i32(result.output_text, tmp_path) == value
 
     @pytest.mark.parametrize("literal", ["2147483648", "-2147483649", "9" * 5000])
-    def test_n6_parser_dispatch_enforces_range_without_validator(self, literal):
+    def test_parser_dispatch_enforces_range_without_validator(self, literal):
         with pytest.raises(DSLParseError, match="i32.*range"):
             DSLParser()._dispatch_op("const", [literal, "dtype:i32"])
 
-    def test_n6_long_zero_prefixed_integer_has_a_deterministic_range_contract(self):
+    def test_long_zero_prefixed_integer_has_a_deterministic_range_contract(self):
         literal = "+" + "0" * 5000 + "1"
         source = f"a = const({literal},dtype:i32)\nreturn a"
         program = DSLParser().parse(source)
@@ -264,7 +264,7 @@ class TestTypedInputBoundaries:
         assert program.functions[0].blocks[0].instructions[0].attrs["value"] == 1
 
     @pytest.mark.parametrize("dtype", [T.FLOAT32, T.FLOAT64])
-    def test_n7_machine_definitions_are_scoped_to_each_function(self, dtype, tmp_path):
+    def test_machine_definitions_are_scoped_to_each_function(self, dtype, tmp_path):
         b = IRBuilder()
         b.new_function("main")
         b.new_block("entry")

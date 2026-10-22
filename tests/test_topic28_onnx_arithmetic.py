@@ -1,7 +1,7 @@
-"""R2/R3 regressions: ONNX constants and variadic scalar Min/Max.
+"""ONNX constant arithmetic and variadic scalar Min/Max.
 
-Every generated model is checked by the installed ONNX checker. The execution
-tests compare binary results and fflags, not merely compilation or assembly text.
+Every generated model is checked by the installed ONNX checker. Execution
+tests compare binary results and fflags, not merely compilation or asm text.
 """
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ class TestONNXArithmeticSemantics:
     @pytest.mark.parametrize(
         "operator,opcode", (("Add", OpCode.ADD), ("Mul", OpCode.MUL))
     )
-    def test_r2_float_constants_keep_defined_target_arithmetic(
+    def test_float_constants_keep_defined_target_arithmetic(
         self,
         tmp_path,
         type_name,
@@ -112,7 +112,7 @@ class TestONNXArithmeticSemantics:
     @pytest.mark.parametrize("type_name,ir_type,width", TYPES)
     @pytest.mark.parametrize("operator,expected", (("Add", 5.0), ("Mul", 6.0)))
     @pytest.mark.parametrize("continued", (False, True))
-    def test_r2_constant_arithmetic_returns_and_remains_usable(
+    def test_constant_arithmetic_returns_and_remains_usable(
         self,
         tmp_path,
         type_name,
@@ -136,7 +136,7 @@ class TestONNXArithmeticSemantics:
     @pytest.mark.parametrize("type_name,ir_type,width", TYPES)
     @pytest.mark.parametrize("operator", ("Add", "Mul"))
     @pytest.mark.parametrize("optimization", ("none", "basic", "all"))
-    def test_r2_constant_arithmetic_keeps_hardware_rounding_and_flags(
+    def test_constant_arithmetic_keeps_hardware_rounding_and_flags(
         self,
         tmp_path,
         type_name,
@@ -170,7 +170,7 @@ class TestONNXArithmeticSemantics:
         )
 
     @pytest.mark.parametrize("operator,expected", (("Add", 5), ("Mul", 6)))
-    def test_r2_integer_constant_fold_is_deferred_to_typed_folder(
+    def test_integer_constant_fold_is_deferred_to_typed_folder(
         self, tmp_path, operator, expected
     ):
         path = _model(
@@ -193,7 +193,7 @@ class TestONNXArithmeticSemantics:
     @pytest.mark.parametrize("operator", ("Min", "Max"))
     @pytest.mark.parametrize("count", (1, 2, 3, 5))
     @pytest.mark.parametrize("parameter", (False, True))
-    def test_r3_all_variadic_inputs_and_single_input_are_preserved(
+    def test_all_variadic_inputs_and_single_input_are_preserved(
         self,
         tmp_path,
         type_name,
@@ -250,7 +250,7 @@ class TestONNXArithmeticSemantics:
         assert _instructions(program)[-1].operands[0].dtype is ir_type
 
     @pytest.mark.parametrize("operator", ("min", "max"))
-    def test_r3_empty_variadic_input_has_a_clear_diagnostic(self, operator):
+    def test_empty_variadic_input_has_a_clear_diagnostic(self, operator):
         parser = ONNXParser()
         with pytest.raises(ONNXParseError, match="requires at least one input"):
             getattr(parser, f"_handle_{operator}")(None, [], ["y"])

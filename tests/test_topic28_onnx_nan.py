@@ -82,16 +82,17 @@ class TestONNXMinMaxNaNPropagation:
     @pytest.mark.parametrize("operator", ("Min", "Max"))
     @pytest.mark.parametrize("width", (32, 64))
     @pytest.mark.parametrize("values", ((float("nan"), 2.0), (2.0, float("nan"))))
-    @pytest.mark.parametrize("allocator", ("naive", "greedy", "linear"))
     @pytest.mark.parametrize("optimization", ("none", "basic", "all"))
     def test_onnx_min_max_propagate_nan(
-        self, tmp_path, operator, width, values, allocator, optimization
+        self, tmp_path, operator, width, values, optimization
     ):
+        # NaN propagation is a frontend/optimizer rule; allocator coverage
+        # lives in test_onnx_nan_survives_variadic_register_pressure.
         model, path = _model(tmp_path, operator, width, values)
         expected = ReferenceEvaluator(model).run(None, {})[0].item()
         assert math.isnan(expected)
         bits, flags = execute_fp(
-            _compile(path, tmp_path, allocator, optimization), tmp_path, width
+            _compile(path, tmp_path, "greedy", optimization), tmp_path, width
         )
         assert math.isnan(
             _float(bits, width)

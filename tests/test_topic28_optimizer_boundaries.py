@@ -1,4 +1,8 @@
-"""G1-G5: ABI, optimizer and compilation-unit contracts with real execution."""
+"""Optimizer and compilation-unit contracts with real execution.
+
+Covers cross-block DCE, unused FP exceptions, per-function label scoping and
+unsupported-type rejection.
+"""
 
 import struct
 
@@ -153,10 +157,10 @@ def unsupported_program(position):
     return b.program
 
 
-class TestTopic28OverallReviewRegressions:
+class TestOptimizerAndTypeBoundaries:
     @pytest.mark.parametrize("mode", MODES)
     @pytest.mark.parametrize("argument", [7, -7, 0, -2147483648])
-    def test_g1_i32_onnx_parameter_is_materialized(self, mode, argument, tmp_path):
+    def test_i32_onnx_parameter_is_materialized(self, mode, argument, tmp_path):
         from onnx.reference import ReferenceEvaluator
 
         path, model = onnx_div_model(tmp_path, T.INT32, parameter=True)
@@ -173,7 +177,7 @@ class TestTopic28OverallReviewRegressions:
 
     @pytest.mark.parametrize("verify", [False, True])
     @pytest.mark.parametrize("case", ["two", "nine", "array", "unknown"])
-    def test_g1_unsupported_integer_parameter_layout_is_rejected(
+    def test_unsupported_integer_parameter_layout_is_rejected(
         self, verify, case, tmp_path
     ):
         b = IRBuilder()
@@ -195,7 +199,7 @@ class TestTopic28OverallReviewRegressions:
     @pytest.mark.parametrize("mode", MODES)
     @pytest.mark.parametrize("level", LEVELS)
     @pytest.mark.parametrize("dtype", [T.INT32, T.FLOAT32, T.FLOAT64])
-    def test_g2_dce_keeps_cross_block_definitions(self, mode, level, dtype, tmp_path):
+    def test_dce_keeps_cross_block_definitions(self, mode, level, dtype, tmp_path):
         program = cross_block_program(dtype)
         result = compile_ir(program, tmp_path, config(mode, level, True))
         assert result.success, result.errors
@@ -213,7 +217,7 @@ class TestTopic28OverallReviewRegressions:
     @pytest.mark.parametrize(
         "passes", [("dead-code-elim",), ("dead-code-elim", "dead-code-elim")]
     )
-    def test_g2_explicit_repeated_dce_keeps_valid_ir(self, dtype, passes, tmp_path):
+    def test_explicit_repeated_dce_keeps_valid_ir(self, dtype, passes, tmp_path):
         program = cross_block_program(dtype)
         result = compile_ir(program, tmp_path, config(passes=passes))
         assert result.success, result.errors
@@ -222,7 +226,7 @@ class TestTopic28OverallReviewRegressions:
     @pytest.mark.parametrize("level", LEVELS)
     @pytest.mark.parametrize("width", [32, 64])
     @pytest.mark.parametrize("case", ["sqrt", "divide", "inexact"])
-    def test_g3_dce_preserves_unused_fp_exceptions(self, level, width, case, tmp_path):
+    def test_dce_preserves_unused_fp_exceptions(self, level, width, case, tmp_path):
         source, flags = exception_source(width, case)
         result = CompilerDriver(config("greedy", level, True)).compile(
             "", str(tmp_path / "out.s"), dsl_source=source
@@ -235,7 +239,7 @@ class TestTopic28OverallReviewRegressions:
 
     @pytest.mark.parametrize("level", LEVELS)
     @pytest.mark.parametrize("width,dtype", FLOATS)
-    def test_g3_unused_min_with_signaling_nan_still_sets_invalid(
+    def test_unused_min_with_signaling_nan_still_sets_invalid(
         self, level, width, dtype, tmp_path
     ):
         b = IRBuilder()
@@ -256,7 +260,7 @@ class TestTopic28OverallReviewRegressions:
     @pytest.mark.parametrize(
         "passes", [("dead-code-elim",), ("dead-code-elim", "dead-code-elim")]
     )
-    def test_g3_explicit_repeated_dce_uses_same_fp_policy(
+    def test_explicit_repeated_dce_uses_same_fp_policy(
         self, width, passes, tmp_path
     ):
         source, flags = exception_source(width, "sqrt")
@@ -272,7 +276,7 @@ class TestTopic28OverallReviewRegressions:
     @pytest.mark.parametrize("mode", MODES)
     @pytest.mark.parametrize("dtype", [T.INT32, T.FLOAT32, T.FLOAT64])
     @pytest.mark.parametrize("takes_true", [False, True])
-    def test_g4_multifunction_labels_and_branch_targets_are_scoped(
+    def test_multifunction_labels_and_branch_targets_are_scoped(
         self, mode, dtype, takes_true, tmp_path
     ):
         program = multi_function_program(dtype, takes_true)
@@ -298,7 +302,7 @@ class TestTopic28OverallReviewRegressions:
                     result.output_text, tmp_path, width, function=function
                 ) == (bits(expected, width), 0)
 
-    def test_g4_selector_rerun_has_stable_namespaced_labels(self):
+    def test_selector_rerun_has_stable_namespaced_labels(self):
         selector = ExtendedInstructionSelector(multi_function_program(T.INT32, True))
         first = selector.run()
         second = selector.run()
@@ -308,7 +312,7 @@ class TestTopic28OverallReviewRegressions:
 
     @pytest.mark.parametrize("mode", MODES)
     @pytest.mark.parametrize("extended", [False, True])
-    def test_g4_unconditional_branch_uses_scoped_labels_in_both_selectors(
+    def test_unconditional_branch_uses_scoped_labels_in_both_selectors(
         self, mode, extended, tmp_path
     ):
         b = IRBuilder()
@@ -336,7 +340,7 @@ class TestTopic28OverallReviewRegressions:
             )
 
     @pytest.mark.parametrize("verify", [False, True])
-    def test_g5_onnx_i64_is_rejected_before_optimization(self, verify, tmp_path):
+    def test_onnx_i64_is_rejected_before_optimization(self, verify, tmp_path):
         from onnx.reference import ReferenceEvaluator
 
         path, model = onnx_div_model(tmp_path, T.INT64)
@@ -356,7 +360,7 @@ class TestTopic28OverallReviewRegressions:
         "position", ["global", "parameter", "local", "alloca", "operand", "return"]
     )
     @pytest.mark.parametrize("verify", [False, True])
-    def test_g5_unsupported_unused_or_referenced_types_are_not_hidden_by_dce(
+    def test_unsupported_unused_or_referenced_types_are_not_hidden_by_dce(
         self, position, verify, tmp_path
     ):
         result = compile_ir(
@@ -370,7 +374,7 @@ class TestTopic28OverallReviewRegressions:
     @pytest.mark.parametrize(
         "position", ["global", "parameter", "local", "alloca", "operand", "return"]
     )
-    def test_g5_direct_selector_has_same_type_boundary(self, position):
+    def test_direct_selector_has_same_type_boundary(self, position):
         with pytest.raises(ValueError, match="extended.*i64|i64.*extended"):
             ExtendedInstructionSelector(unsupported_program(position)).run()
 
@@ -386,7 +390,7 @@ class TestTopic28OverallReviewRegressions:
 
     @pytest.mark.parametrize("dtype", [T.FLOAT32, T.FLOAT64])
     @pytest.mark.parametrize("preserve", [False, True])
-    def test_g3_float_policy_does_not_disable_constant_dce_or_change_default(
+    def test_float_policy_does_not_disable_constant_dce_or_change_default(
         self, dtype, preserve
     ):
         b = IRBuilder()

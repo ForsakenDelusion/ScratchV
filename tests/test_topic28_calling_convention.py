@@ -1,9 +1,12 @@
-"""Fourth-review contracts, including real caller state and raw ONNX bits."""
+"""Calling-convention and source-bit contracts.
+
+Covers returns across real calls, raw ONNX bits, peephole symbol scoping and
+selector roles. Product objects are linked from an independent caller.
+"""
 
 import struct
 
 import numpy as np
-import onnx
 import pytest
 from onnx import TensorProto, helper, numpy_helper
 from onnx.reference import ReferenceEvaluator
@@ -29,6 +32,7 @@ from tests.topic28_runtime import (
     observe,
     write_exit,
 )
+from tests.topic28_onnx import save_graph as save_model
 from tests.topic28_support import compile_ir
 
 
@@ -52,28 +56,20 @@ def config(mode, level, verify, *, extended=True, isa=None, abi=None, **kw):
     )
 
 
-def save_model(graph, tmp_path):
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
-    onnx.checker.check_model(model)
-    path = tmp_path / "input.onnx"
-    onnx.save(model, path)
-    return path, model
-
-
 def float_bits(value, dtype):
     return int.from_bytes(
         struct.pack("<d" if dtype is T.FLOAT64 else "<f", value), "little"
     )
 
 
-class TestTopic28FourthReviewRegressions:
+class TestCallingConventionAndSourceBits:
     @pytest.mark.parametrize("mode", MODES)
     @pytest.mark.parametrize(
         "dtype,extended",
         [(T.INT32, False), (T.INT32, True), (T.FLOAT32, True), (T.FLOAT64, True)],
     )
     @pytest.mark.parametrize("path", [0, 1])
-    def test_t10_product_returns_restore_caller_state(
+    def test_product_returns_restore_caller_state(
         self, mode, dtype, extended, path, tmp_path
     ):
         b = IRBuilder()
@@ -113,7 +109,7 @@ class TestTopic28FourthReviewRegressions:
         ) == (wanted, 0)
 
     @pytest.mark.parametrize("mode", MODES)
-    def test_t10_real_nested_call_preserves_mixed_live_values(self, mode, tmp_path):
+    def test_real_nested_call_preserves_mixed_live_values(self, mode, tmp_path):
         fp = lambda name, width: P.vreg(name, RC.FPR, width)
         ins = [
             MI(O.LABEL, target="main"),
@@ -176,7 +172,7 @@ class TestTopic28FourthReviewRegressions:
 
     @pytest.mark.parametrize("extended", [False, True])
     @pytest.mark.parametrize("case", ["step2", "large", "zero", "nested", "overflow"])
-    def test_t11_positive_steps_execute_as_declared(self, extended, case, tmp_path):
+    def test_positive_steps_execute_as_declared(self, extended, case, tmp_path):
         start, end, step = {
             "step2": (0, 5, 2),
             "large": (0, 7000, 3000),
@@ -213,15 +209,16 @@ class TestTopic28FourthReviewRegressions:
         )
         assert observe(assembly, tmp_path, isa="rv32im", abi="ilp32") == (expected, 0)
 
-    @pytest.mark.parametrize("mode", MODES)
     @pytest.mark.parametrize("dtype,isa,abi", TARGETS)
     @pytest.mark.parametrize(
         "pattern",
         ["snan", "negative_snan", "qnan", "negative_zero", "infinity", "subnormal"],
     )
-    def test_t12_onnx_returns_original_bits(
-        self, mode, dtype, isa, abi, pattern, tmp_path
+    def test_onnx_returns_original_bits(
+        self, dtype, isa, abi, pattern, tmp_path
     ):
+        # Source bits are preserved before allocation; allocator behavior is
+        # covered by the ABI/caller-state tests.
         raw = (
             {
                 "snan": 0x7F800001,
@@ -261,7 +258,7 @@ class TestTopic28FourthReviewRegressions:
             tmp_path,
         )
         assert ReferenceEvaluator(model).run(None, {})[0].tobytes() == array.tobytes()
-        result = CompilerDriver(config(mode, "all", True, isa=isa, abi=abi)).compile(
+        result = CompilerDriver(config("greedy", "all", True, isa=isa, abi=abi)).compile(
             str(path), str(tmp_path / "out.s")
         )
         assert result.success, result.errors
@@ -272,7 +269,7 @@ class TestTopic28FourthReviewRegressions:
 
     @pytest.mark.parametrize("dtype,isa,abi", TARGETS)
     @pytest.mark.parametrize("operation", ["Min", "Max"])
-    def test_t12_onnx_snan_arithmetic_sets_invalid(
+    def test_onnx_snan_arithmetic_sets_invalid(
         self, dtype, isa, abi, operation, tmp_path
     ):
         raw = 0x7F800001 if dtype is T.FLOAT32 else 0x7FF0000000000001
@@ -310,7 +307,7 @@ class TestTopic28FourthReviewRegressions:
     @pytest.mark.parametrize(
         "name", ["_zero", "__scratchv_peephole_zero_1", "__scratchv_peephole_zero_2"]
     )
-    def test_t13_peephole_names_do_not_alias_globals(self, name, tmp_path):
+    def test_peephole_names_do_not_alias_globals(self, name, tmp_path):
         b = IRBuilder()
         b.program.global_values.append(Value(name, T.FLOAT32, True, 3.0))
         x = b.make_value("x", T.INT32)
@@ -320,7 +317,7 @@ class TestTopic28FourthReviewRegressions:
         assembly = compile_ir(b.program, tmp_path, config("greedy", "all", True))
         assert observe(assembly, tmp_path, argument=7) == (7, 0)
 
-    def test_t13_repeated_peephole_reserves_future_definitions(self):
+    def test_repeated_peephole_reserves_future_definitions(self):
         b = IRBuilder()
         x = b.make_value("x", T.INT32)
         b.new_function("main", [x])
@@ -348,7 +345,7 @@ class TestTopic28FourthReviewRegressions:
             "$model",
         ],
     )
-    def test_t14_unsafe_graph_symbols_rejected_before_output(
+    def test_unsafe_graph_symbols_rejected_before_output(
         self, verify, name, tmp_path
     ):
         # Function names are checked by selection, before register allocation.
@@ -375,7 +372,7 @@ class TestTopic28FourthReviewRegressions:
     @pytest.mark.parametrize(
         "name", [".local_model", "ordinary_model", "_private_model"]
     )
-    def test_t14_function_exports_link_from_separate_caller(
+    def test_function_exports_link_from_separate_caller(
         self, dtype, name, tmp_path
     ):
         b = IRBuilder()
@@ -394,7 +391,7 @@ class TestTopic28FourthReviewRegressions:
 
     @pytest.mark.parametrize("mode", MODES)
     @pytest.mark.parametrize("dtype", [T.INT32, T.FLOAT32, T.FLOAT64])
-    def test_t14_direct_selector_keeps_two_function_roles(self, mode, dtype, tmp_path):
+    def test_direct_selector_keeps_two_function_roles(self, mode, dtype, tmp_path):
         b = IRBuilder()
         for name, value in [(".first_model", 5), (".second_model", 9)]:
             b.new_function(name)
@@ -437,7 +434,7 @@ class TestTopic28FourthReviewRegressions:
         ],
     )
     @pytest.mark.parametrize("location", ["unused_global", "load_const"])
-    def test_t12_invalid_bit_metadata_rejected_even_when_unused(
+    def test_invalid_bit_metadata_rejected_even_when_unused(
         self, dtype, raw, location, tmp_path
     ):
         b = IRBuilder()
@@ -460,7 +457,7 @@ class TestTopic28FourthReviewRegressions:
         result = driver.compile("", str(tmp_path / "out.s"), dsl_source="")
         assert not result.success and any("bit_pattern" in e for e in result.errors)
 
-    def test_t12_global_and_load_metadata_survive_alias_and_selector_reuse(
+    def test_global_and_load_metadata_survive_alias_and_selector_reuse(
         self, tmp_path
     ):
         raw = 0x7F800123
@@ -489,7 +486,7 @@ class TestTopic28FourthReviewRegressions:
         assert result.success, result.errors
         assert observe(result.output_text, tmp_path, T.FLOAT32) == (raw, 0)
 
-    def test_t12_conflicting_load_bit_metadata_is_diagnosed(self, tmp_path):
+    def test_conflicting_load_bit_metadata_is_diagnosed(self, tmp_path):
         b = IRBuilder()
         b.new_function("main")
         b.new_block("entry")
@@ -510,11 +507,11 @@ class TestTopic28FourthReviewRegressions:
             (T.FLOAT32, True),
         ],
     )
-    def test_t12_builder_rejects_invalid_explicit_encoding(self, dtype, raw):
+    def test_builder_rejects_invalid_explicit_encoding(self, dtype, raw):
         with pytest.raises(ValueError, match="bit_pattern"):
             IRBuilder().load_const(1, dtype, bit_pattern=raw)
 
-    def test_t14_unsupported_call_symbol_is_rejected(self):
+    def test_unsupported_call_symbol_is_rejected(self):
         ins = [
             MI(O.LABEL, target="main", label_role="function"),
             MI(O.CALL, target="$helper"),

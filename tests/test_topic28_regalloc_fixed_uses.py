@@ -1,4 +1,4 @@
-"""R8 follow-up: fixed physical sources can relocate a virtual definition.
+"""Fixed physical sources can relocate a virtual definition across CFG edges.
 
 The returned virtual result must retain the bits actually computed before a
 CFG edge, even when its preferred physical register is a fixed source operand.
@@ -24,7 +24,7 @@ class TestFixedRegisterUses:
     @pytest.mark.parametrize("width", (32, 64))
     @pytest.mark.parametrize("alias", ("ft0", "f0"))
     @pytest.mark.parametrize("cfg", ("jump", "diamond_taken", "diamond_not_taken"))
-    def test_r8_fixed_source_relocation_keeps_computed_result_across_edges(
+    def test_fixed_source_relocation_keeps_computed_result_across_edges(
         self,
         width,
         alias,

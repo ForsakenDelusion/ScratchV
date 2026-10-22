@@ -1,4 +1,8 @@
-"""R5/R8: assembler and execution regressions written before the fixes."""
+"""Register allocation and emitter edge cases.
+
+Covers integer constant legality, physical clobber on CFG edges and
+terminator-defined virtual registers.
+"""
 
 import struct
 
@@ -21,7 +25,7 @@ def _fp(name, width):
     return P.vreg(name, RC.FPR, width)
 
 
-class TestBackendReviewRegressions:
+class TestRegallocEdgeCases:
     @pytest.mark.parametrize("extended", [False, True])
     @pytest.mark.parametrize(
         "a,b,expression,expected",
@@ -36,7 +40,7 @@ class TestBackendReviewRegressions:
             (-2147483648, 0, "neg(a)", -2147483648),
         ],
     )
-    def test_r5_integer_constant_operations_are_legal_and_execute(
+    def test_integer_constant_operations_are_legal_and_execute(
         self, extended, a, b, expression, expected, tmp_path
     ):
         source = f"a = const({a},dtype:i32)\nb = const({b},dtype:i32)\nr = {expression}\nreturn r"
@@ -52,7 +56,7 @@ class TestBackendReviewRegressions:
 
     @pytest.mark.parametrize("extended", [False, True])
     @pytest.mark.parametrize("condition,expected", [("a < 3", 7), ("a > 3", 9)])
-    def test_r5_integer_control_flow_constant_stores_are_legal(
+    def test_integer_control_flow_constant_stores_are_legal(
         self, extended, condition, expected, tmp_path
     ):
         source = f"""a = const(1,dtype:i32)
@@ -75,7 +79,7 @@ return r
         assert execute_i32(result.output_text, tmp_path) == expected
 
     @pytest.mark.parametrize("alias", ["ft0", "f0"])
-    def test_r8_report_literal_stream_allocates_after_physical_clobber(self, alias):
+    def test_report_literal_stream_allocates_after_physical_clobber(self, alias):
         stream = [
             MI(O.LABEL, target="main"),
             MI(O.LI, P.vreg("addr"), P.immediate(256)),
@@ -103,7 +107,7 @@ return r
         ],
     )
     @pytest.mark.parametrize("cfg", ["jump", "diamond_taken", "diamond_not_taken"])
-    def test_r8_physical_definition_preserves_edge_value_bits(
+    def test_physical_definition_preserves_edge_value_bits(
         self, kind, width, alias, cfg, tmp_path
     ):
         is_float = kind == "float"
@@ -165,7 +169,7 @@ return r
             assert execute_i32(assembly, tmp_path) == 7
 
     @pytest.mark.parametrize("opcode", [O.JAL, O.JALR])
-    def test_r8_defining_virtual_terminator_is_rejected_instead_of_storing_before_definition(
+    def test_defining_virtual_terminator_is_rejected_instead_of_storing_before_definition(
         self, opcode
     ):
         # A link result is defined by the jump itself. Saving it before the jump

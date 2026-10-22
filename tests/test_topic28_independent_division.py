@@ -1,4 +1,4 @@
-"""N5: reference division is typed and agrees with actual RV32 execution."""
+"""Reference division is typed and agrees with actual RV32 execution."""
 
 import numpy as np
 import pytest
@@ -32,7 +32,7 @@ class TestDivisionReferenceSemantics:
             (2147483647, 3, 715827882),
         ],
     )
-    def test_n5_i32_division_reference_matches_qemu(self, a, b, expected, tmp_path):
+    def test_i32_division_reference_matches_qemu(self, a, b, expected, tmp_path):
         source = f"a = const({a},dtype:i32)\nb = const({b},dtype:i32)\nr = div(a,b)\nreturn r"
         result = CompilerDriver(
             CompilerConfig(use_extended_isel=True, reg_alloc="greedy", verify_ir=True)
@@ -57,7 +57,7 @@ class TestDivisionReferenceSemantics:
             ("nan", "4"),
         ],
     )
-    def test_n5_float_division_reference_keeps_denominator_and_dtype(
+    def test_float_division_reference_keeps_denominator_and_dtype(
         self, width, a, b, tmp_path
     ):
         source = f"a = const({a},dtype:f{width})\nb = const({b},dtype:f{width})\nr = div(a,b)\nreturn r"
@@ -79,7 +79,7 @@ class TestDivisionReferenceSemantics:
             assert int(np.asarray(reference).view(unsigned)) == bits
 
     @pytest.mark.parametrize("executor", ["dsl", "ir"])
-    def test_n5_integer_division_reference_broadcasts_arrays(self, executor):
+    def test_integer_division_reference_broadcasts_arrays(self, executor):
         left = np.asarray([[7], [-7], [-2147483648]], dtype=np.int32)
         right = np.asarray([3, -1, 0], dtype=np.int32)
         if executor == "dsl":
