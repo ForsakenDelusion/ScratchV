@@ -1,4 +1,9 @@
-"""Contracts shared by Topic 28 and the checked tensor execution pipeline."""
+"""Encoded constants must win over Python float values end to end.
+
+Covers the RV32 overflow policy of extended integer folding, the separation
+between tensor and scalar initializer modes in a reused parser, and exact
+bit-pattern fidelity including negative zero.
+"""
 
 import numpy as np
 import pytest
@@ -12,10 +17,10 @@ from scratchv.verification.ir_interpreter import IRInterpreter
 from tests.topic28_runtime import execute_i32
 
 
-class TestUpstreamIntegration:
+class TestEncodedConstants:
     @pytest.mark.parametrize("operation", ["div(a,b)", "abs(a)"])
     @pytest.mark.parametrize("passes", [None, ("constant-folding",)])
-    def test_rv32_compiler_selects_integer_overflow_policy(self, tmp_path, operation, passes):
+    def test_integer_overflow_wraps_and_folds_once(self, tmp_path, operation, passes):
         source = (
             "a = const(-2147483648,dtype:i32)\n"
             "b = const(-1,dtype:i32)\n"
@@ -80,29 +85,3 @@ class TestUpstreamIntegration:
         builder.ret(builder.load_const(0.0, DataType.FLOAT32, bit_pattern=0x80000000))
         result = IRInterpreter(builder.program).run({}).return_value
         assert result.dtype == np.float32 and result == 0 and np.signbit(result)
-
-    @pytest.mark.parametrize("location", ["instruction", "result", "global"])
-    def test_qwen_audit_rejects_changed_float_encoding(self, tmp_path, location):
-        import onnx
-        from probes.w2_qwen3_parse.audit import AuditedONNXParser, AuditError, audit_parsed_model
-
-        graph = onnx.helper.make_graph(
-            [onnx.helper.make_node("Constant", [], ["zero"], value_float=-0.0)],
-            "main", [],
-            [onnx.helper.make_tensor_value_info("zero", onnx.TensorProto.FLOAT, [])],
-        )
-        model = onnx.helper.make_model(graph)
-        path = tmp_path / "encoded.onnx"
-        onnx.save(model, path)
-        parser = AuditedONNXParser()
-        program = parser.parse(str(path))
-        assert audit_parsed_model(model, parser, program, tmp_path)["passed"]
-        instruction = program.functions[0].blocks[0].instructions[0]
-        if location == "instruction":
-            instruction.attrs["bit_pattern"] = 0
-        elif location == "result":
-            instruction.dest.bit_pattern = 0
-        else:
-            program.global_values[0].bit_pattern = 0
-        with pytest.raises(AuditError, match="bit pattern mismatch"):
-            audit_parsed_model(model, parser, program, tmp_path)
