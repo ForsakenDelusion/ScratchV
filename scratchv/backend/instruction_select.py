@@ -33,6 +33,8 @@ class InstructionSelector:
         self._reserved_vreg_names = self._collect_ir_value_names()
         self._block_labels: dict[str, str] = {}
         self._reserved_labels: set[str] = set()
+        self._bound_value_names: set[str] = set()
+        self._globals = {value.name: value for value in program.global_values}
 
     def _collect_ir_value_names(self) -> set[str]:
         """Reserve every user-visible IR name before creating temporaries."""
@@ -81,6 +83,15 @@ class InstructionSelector:
             })
         for function_index, (func, labels) in enumerate(zip(self.program.functions, block_labels)):
             self._block_labels = labels
+            # Resolve named definitions before literal hints for every selector,
+            # including subclasses with their own function/ABI lowering.
+            self._bound_value_names = {value.name for value in func.params}
+            self._bound_value_names.update(
+                instr.dest.name
+                for block in func.blocks
+                for instr in (*block.phi_nodes, *block.instructions)
+                if instr.dest is not None
+            )
             start = len(self._instructions)
             self._select_function(func)
             if multiple_functions:
@@ -233,6 +244,11 @@ class InstructionSelector:
     def _op(self, instr: Instruction, idx: int):
         """Get an operand from an IR instruction as a machine operand."""
         op = instr.operands[idx]
+        if op.name in self._bound_value_names:
+            return MachineOperand.vreg(op.name)
+        # Global scalar literals are defined by Program.global_values, not by
+        # potentially incomplete or stale metadata on a separate reference.
+        op = self._globals.get(op.name, op)
         if op.is_constant and op.const_value is not None:
             return MachineOperand.immediate(int(op.const_value))
         return MachineOperand.vreg(op.name)
@@ -607,6 +623,8 @@ class InstructionSelector:
 
     def _select_gemm(self, instr: Instruction) -> None:
         """GEMM inline: real RISC-V MUL+ADD MAC."""
+        if any(instr.attrs.get(name, 1) != 1 for name in ("alpha", "beta")):
+            raise ValueError("Legacy RISC-V GEMM does not support nondefault alpha/beta scaling")
         dst = self._dst(instr)
         a_reg = self._op(instr, 0)
         w_reg = self._op(instr, 1)

@@ -38,6 +38,7 @@ class ONNXParser:
         self._constant_cache = {}
         self._base_dir = ""
         self._mmap_external_data = False
+        self._opsets: dict[str, int] = {}
 
     def parse(self, model_path: str, *, mmap_external_data: bool = False,
               scalar_initializers: bool = False) -> Program:
@@ -51,6 +52,9 @@ class ONNXParser:
         integrity check; model/weight hashes must be validated separately.
         ``scalar_initializers`` lets the scalar RV32 backend materialize
         one-element tensors as constants while retaining their declared shape.
+        Runtime inputs require explicit static shapes after ONNX inference;
+        symbolic dimensions or unknown rank are rejected, not treated as zero.
+        Inputs also listed as initializers use the initializer's fixed shape.
         """
         if not isinstance(mmap_external_data, bool):
             raise ONNXParseError("mmap_external_data must be boolean")
@@ -76,6 +80,7 @@ class ONNXParser:
         # Inspect/infer the graph before materializing external weights. This
         # avoids serializing a >2 GiB protobuf just to infer tensor shapes.
         model = onnx.load(model_path, load_external_data=False)
+        self._opsets = {item.domain: item.version for item in model.opset_import}
         self._value_shapes = {
             value.name: self._shape(value)
             for value in [*model.graph.input, *model.graph.value_info, *model.graph.output]
@@ -104,6 +109,28 @@ class ONNXParser:
         except onnx.shape_inference.InferenceError as exc:
             raise ONNXParseError(f"ONNX shape inference failed: {exc}") from exc
         graph = model.graph
+        # Protobuf returns dim_value=0 when a dimension is symbolic or absent.
+        # Check presence before reading it: an explicit zero-sized tensor is
+        # static, while a missing shape field is unknown rank, not a scalar.
+        input_shapes = {}
+        initializer_names = {init.name for init in graph.initializer}
+        for inp in graph.input:
+            if inp.name in initializer_names:
+                # Legacy exports list fixed weights as graph inputs as well.
+                # This parser binds those as initializers, not parameters;
+                # their tensor data defines the shape even if input metadata
+                # remains symbolic after ONNX shape inference.
+                continue
+            tensor = inp.type.tensor_type
+            if not tensor.HasField("shape") or any(
+                not dim.HasField("dim_value") or dim.dim_value < 0
+                for dim in tensor.shape.dim
+            ):
+                raise ONNXParseError(
+                    f"Input {inp.name!r} requires a static nonnegative shape; "
+                    "dynamic dimensions and unknown rank are unsupported"
+                )
+            input_shapes[inp.name] = tuple(dim.dim_value for dim in tensor.shape.dim)
         self._tensor_info = {
             value.name: value.type.tensor_type
             for value in [*graph.input, *graph.value_info, *graph.output]
@@ -138,8 +165,7 @@ class ONNXParser:
                 continue  # already defined as initializer
             dtype = self._dtype(inp.type.tensor_type.elem_type)
             val = self.builder.make_value(name=inp.name, dtype=dtype)
-            # Infer shape from ONNX type
-            val.shape = self._shape(inp)
+            val.shape = input_shapes[inp.name]
             func.params.append(val)
             self._value_map[inp.name] = val
 
@@ -459,11 +485,22 @@ class ONNXParser:
 
     def _handle_gelu(self, node, inputs: list[Value],
                      outputs: list[str]) -> None:
+        # ONNX defaults to the exact erf formulation, while this IR's GELU
+        # deliberately implements the tanh approximation. Never substitute it
+        # for the default just because both operations share a name.
+        attrs = self._attributes(node)
+        if set(attrs) - {"approximate"} or attrs.get("approximate", b"none") != b"tanh":
+            raise ONNXParseError("Gelu supports only approximate='tanh'; exact Gelu is unsupported")
         result = self.builder.gelu(inputs[0])
         self._define_outputs(outputs, result)
 
     def _handle_softmax(self, node, inputs: list[Value],
                         outputs: list[str]) -> None:
+        # Before opset 13 Softmax flattens dimensions from axis onward and
+        # defaults to axis=1; the IR normalizes a single axis. Supporting the
+        # modern default for a legacy graph silently produces wrong values.
+        if self._opsets.get(node.domain, 0) < 13:
+            raise ONNXParseError("Softmax requires ONNX opset >= 13; legacy flatten semantics are unsupported")
         axis = -1
         for attr in node.attribute:
             if attr.name == "axis":
@@ -543,15 +580,17 @@ class ONNXParser:
 
     def _handle_gemm(self, node, inputs: list[Value],
                      outputs: list[str]) -> None:
-        a, w, b = inputs[0], inputs[1], inputs[2]
-        trans_a = False
-        trans_b = False
-        for attr in node.attribute:
-            if attr.name == "transA":
-                trans_a = attr.i != 0
-            elif attr.name == "transB":
-                trans_b = attr.i != 0
-        result = self.builder.gemm(a, w, b, trans_a, trans_b)
+        attrs = self._attributes(node)
+        if set(attrs) - {"alpha", "beta", "transA", "transB"}:
+            raise ONNXParseError("Unsupported Gemm attributes")
+        if len(inputs) not in (2, 3):
+            raise ONNXParseError("Gemm requires two matrices and an optional bias")
+        a, w = inputs[:2]
+        b = inputs[2] if len(inputs) == 3 else self.builder.make_const(0, a.dtype)
+        result = self.builder.gemm(
+            a, w, b, bool(attrs.get("transA", 0)), bool(attrs.get("transB", 0)),
+            alpha=attrs.get("alpha", 1.0), beta=attrs.get("beta", 1.0),
+        )
         self._define_outputs(outputs, result)
 
     def _handle_sigmoid(self, node, inputs: list[Value],

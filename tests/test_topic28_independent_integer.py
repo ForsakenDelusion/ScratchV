@@ -7,7 +7,7 @@ from scratchv.analysis.ir_verifier import verify_ir
 from scratchv.compiler import CompilerConfig, CompilerDriver
 from scratchv.frontend.onnx_parser import ONNXParser
 from scratchv.ir.builder import IRBuilder
-from scratchv.ir.types import DataType as T, OpCode
+from scratchv.ir.types import DataType as T, OpCode, Value
 from tests.topic28_runtime import execute_i32
 
 
@@ -89,6 +89,21 @@ def compile_memory(
 
 
 class TestIntegerOptimizationSemantics:
+    @pytest.mark.parametrize("binding", ["parameter", "load_const"])
+    def test_extended_selector_uses_named_binding_before_literal_hint(self, binding, tmp_path):
+        builder = IRBuilder()
+        parameter = Value("input", T.INT32)
+        builder.new_function("main", [parameter] if binding == "parameter" else [])
+        builder.new_block("entry")
+        result = parameter if binding == "parameter" else builder.load_const(7, T.INT32)
+        builder.ret(Value(result.name, T.INT32, is_constant=True, const_value=99))
+        driver = CompilerDriver(CompilerConfig(use_extended_isel=True, verify_ir=True))
+        driver._parse = lambda *args: builder.program
+        compiled = driver.compile("", str(tmp_path / "out.s"), dsl_source="")
+        assert compiled.success, compiled.errors
+        argument = 7 if binding == "parameter" else None
+        assert execute_i32(compiled.output_text, tmp_path, argument=argument) == 7
+
     @pytest.mark.parametrize("operator", ["Add", "Mul"])
     def test_parser_leaves_integer_arithmetic_to_typed_folder(
         self, operator, tmp_path
